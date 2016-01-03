@@ -4,8 +4,6 @@ import java.io.IOException;
 
 public interface IClientCli {
 
-	// --- Commands needed for Lab 1 ---
-
 	/**
 	 * Authenticates the client with the provided username and password.
 	 *
@@ -118,9 +116,6 @@ public interface IClientCli {
 	 *             if an I/O error occurs
 	 */
 	public String exit() throws IOException;
-
-	// --- Commands needed for Lab 2. Please note that you do not have to
-	// implement them for the first submission. ---
 
 	/**
 	 * Authenticates the client with the provided username and key.

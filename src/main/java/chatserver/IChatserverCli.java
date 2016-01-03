@@ -3,9 +3,6 @@ package chatserver;
 import java.io.IOException;
 
 public interface IChatserverCli {
-
-	// --- Commands needed for Lab 1 ---
-
 	/**
 	 * Prints out some information about each user, containing username, login
 	 * status (online/offline)<br/>
