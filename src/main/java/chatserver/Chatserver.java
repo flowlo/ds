@@ -136,7 +136,7 @@ public class Chatserver implements IChatserverCli, Runnable {
 		}
 
 		//main_threadPool.execute(new Interaction_Thread());
-		main_threadPool.execute(new ChatServerTCPThread(this, this.tcp_socket, this.tcp_threadPool, this.users));
+		main_threadPool.execute(new ChatServerTCPThread(this, this.tcp_socket, this.tcp_threadPool));
 
 		main_threadPool.execute(new ChatServerUDPThread(this, this.udp_socket));
 

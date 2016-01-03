@@ -37,14 +37,14 @@ public class ChatServerClientHandler extends AbstractHandler  implements Runnabl
 		ChatSession candidate = this.server.getUsers().get(dto.getUsername());
 
 		if(candidate == null || !candidate.getPassword().equals(dto.getPassword())){
-			return "Login unsuccessful.";
+			return "[[ Login unsuccessful. ]]";
 		}
 
 		session = candidate;
 		candidate.setOnline(true);
 		candidate.setSocket(socket);
 
-		return "Successfully logged in.";
+		return "[[ Successfully logged in. ]]";
 	}
 
 	public void processSend(SendDTO dto){
@@ -74,7 +74,7 @@ public class ChatServerClientHandler extends AbstractHandler  implements Runnabl
 
 	public String processRegister(RegisterDTO dto){
 		this.session.setAddress(dto.getAddress());
-		return "Successfully registered address for " + this.session.getUsername() + '.';
+		return "[[ Successfully registered address for " + this.session.getUsername() + ". ]]";
 	}
 
 	public String processLookup(LookupDTO dto){
@@ -86,7 +86,7 @@ public class ChatServerClientHandler extends AbstractHandler  implements Runnabl
 		if(session != null && (address=session.getAddress()) !=null){
 			return address;
 		}else {
-			return "No address for this user!";
+			return "[[ No address for this user! ]]";
 		}
 	}
 
@@ -94,7 +94,7 @@ public class ChatServerClientHandler extends AbstractHandler  implements Runnabl
 		this.session.setOnline(false);
 		this.session.setSocket(null);
 
-		return "Successfully logged out.";
+		return "[[ Successfully logged out. ]]";
 
 	}
 
@@ -129,11 +129,11 @@ public class ChatServerClientHandler extends AbstractHandler  implements Runnabl
 					if (o instanceof LoginDTO){
 						output.writeObject(new LoggedInDTO((LoginDTO)o, this.processLogin((LoginDTO)o)));
 					}else {
-						output.writeObject(new ErrorResponseDTO("Login first."));
+						output.writeObject(new ErrorResponseDTO("[[ Login first. ]]"));
 					}
 				}else{
 					if (o instanceof LoginDTO){
-						output.writeObject(new LoggedInDTO((LoginDTO)o, "You are already logged in!"));
+						output.writeObject(new LoggedInDTO((LoginDTO)o, "[[ You are already logged in! ]]"));
 					}
 					else if(o instanceof SendDTO){
 						output.writeObject(null);
@@ -154,7 +154,6 @@ public class ChatServerClientHandler extends AbstractHandler  implements Runnabl
 		}catch(IOException e){
 			e.printStackTrace();
 		} catch (ClassNotFoundException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 	}
