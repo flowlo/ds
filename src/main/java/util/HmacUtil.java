@@ -5,6 +5,7 @@ import java.io.IOException;
 
 import java.security.InvalidKeyException;
 import java.security.Key;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 import javax.crypto.Mac;
@@ -49,11 +50,20 @@ public class HmacUtil {
 	 * @return
 	 */
 	public String generateHash(String message){
+		String hashB64 = Base64.getEncoder().encodeToString(generateHashAsByteArray(message));
+		return hashB64;
+	}
+	
+	/**
+	 * 
+	 * @param message
+	 * @return
+	 */
+	private byte[] generateHashAsByteArray(String message){
 		hmac.update(message.getBytes());
 		byte[] hash = hmac.doFinal();
-		String hashB64 = Base64.getEncoder().encodeToString(hash);
 
-		return hashB64;
+		return hash;
 	}
 	
 	/**
@@ -64,7 +74,8 @@ public class HmacUtil {
 	 * 		   false - otherwise
 	 */
 	public Boolean checkHash(String message, String hash){
-		if(this.generateHash(message).equals(hash)){
+		byte[] recceivedHash = Base64.getDecoder().decode(hash);
+		if(MessageDigest.isEqual(this.generateHashAsByteArray(message),recceivedHash)){
 			return true;
 		}else{
 			return false;

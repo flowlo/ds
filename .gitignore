@@ -2,3 +2,6 @@ src/main/resources/*.properties
 build
 bin
 lib
+.project
+.classpath
+.gitignore
