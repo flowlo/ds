@@ -75,16 +75,9 @@ public class PrivateServer implements Runnable {
 			Object o;
 			try {
 				while ((o = input.readObject()) != null) {
-<<<<<<< HEAD
-					if(o instanceof MsgDTO){
-						//DO HMAC Stuff
-						this.client.getShell().writeLine(((MsgDTO) o).getMessage());
-					};
-=======
 					if (o instanceof MsgDTO) {
 						shell.writeLine(((MsgDTO) o).getMessage());
 					}
->>>>>>> origin/crypto
 				}
 			} catch(IOException|ClassNotFoundException e) {
 				e.printStackTrace();

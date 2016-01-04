@@ -1,8 +1,4 @@
 src/main/resources/*.properties
-<<<<<<< HEAD
-build/
-=======
 build
 bin
 lib
->>>>>>> origin/crypto
