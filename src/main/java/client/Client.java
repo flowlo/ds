@@ -11,6 +11,8 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -35,26 +37,26 @@ import cli.Command;
 import cli.Shell;
 import common.CipherInputStream;
 import common.CipherOutputStream;
-import datatransfer.ErrorResponseDTO;
-import datatransfer.LoggedOutDTO;
-import datatransfer.LogoutDTO;
-import datatransfer.LookedUpDTO;
-import datatransfer.LookupDTO;
-import datatransfer.MsgDTO;
-import datatransfer.RegisterDTO;
-import datatransfer.RegisteredDTO;
-import datatransfer.SendDTO;
-import datatransfer.SentDTO;
+import dto.ErrorResponseDTO;
+import dto.LoggedOutDTO;
+import dto.LogoutDTO;
+import dto.LookedUpDTO;
+import dto.LookupDTO;
+import dto.MsgDTO;
+import dto.RegisterDTO;
+import dto.RegisteredDTO;
+import dto.SendDTO;
+import dto.SentDTO;
 import util.Config;
 import util.Keys;
 import util.SecurityUtils;
 
 public class Client implements IClientCli, Runnable {
 
-	private String componentName;
-	private Config config;
-	private InputStream userRequestStream;
-	private PrintStream userResponseStream;
+	private final String componentName;
+	private final Config config;
+	private final InputStream userRequestStream;
+	private final PrintStream userResponseStream;
 
 	private Shell shell;
 
@@ -64,18 +66,19 @@ public class Client implements IClientCli, Runnable {
 
 	private String lastPublicMessage;
 
-	private Socket tcp_socket;
-	private DatagramSocket udp_socket;
+	private Socket socket;
+	private DatagramSocket datagramSocket;
 
-	private ExecutorService main_threadPool = Executors.newFixedThreadPool(2);
-
-	private ExecutorService tcp_threadPool = Executors.newCachedThreadPool();
+	private Thread listenThread;
+	private Thread udpThread;
 
 	private PrivateServer server = null;
+	private Thread serverThread;
 
 	private ConcurrentHashMap<String, String> myContacts;
 
-	private ObjectOutputStream output = null;
+	private ObjectOutputStream oos = null;
+	private ObjectInputStream ois = null;
 
 	/**
 	 * @param componentName
@@ -115,7 +118,7 @@ public class Client implements IClientCli, Runnable {
 		this.udp_port = config.getInt("chatserver.udp.port");
 
 		try {
-			this.tcp_socket = new Socket(this.hostname, this.tcp_port);
+			this.socket = new Socket(this.hostname, this.tcp_port);
 		} catch (UnknownHostException e) {
 			e.printStackTrace();
 		} catch (IOException e) {
@@ -123,7 +126,7 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		try {
-			this.udp_socket = new DatagramSocket();
+			this.datagramSocket = new DatagramSocket();
 		} catch (SocketException e) {
 			e.printStackTrace();
 		}
@@ -137,8 +140,8 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String logout() throws IOException {
-		output.writeObject(new LogoutDTO());
-		output.flush();
+		oos.writeObject(new LogoutDTO());
+		oos.flush();
 
 		return null;
 	}
@@ -147,8 +150,8 @@ public class Client implements IClientCli, Runnable {
 	@Command
 	public String send(String message) throws IOException {
 		this.lastPublicMessage = message;
-		output.writeObject(new SendDTO(message));
-		output.flush();
+		oos.writeObject(new SendDTO(message));
+		oos.flush();
 
 		return null;
 	}
@@ -156,7 +159,8 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String list() throws IOException {
-		this.main_threadPool.execute(new UDP_Thread(this));
+		this.udpThread = new Thread(new UDPThread(this));
+		this.udpThread.run();
 		return null;
 	}
 
@@ -199,8 +203,8 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String lookup(String username) throws IOException {
-		output.writeObject(new LookupDTO(username));
-		output.flush();
+		oos.writeObject(new LookupDTO(username));
+		oos.flush();
 
 		return null;
 	}
@@ -212,11 +216,34 @@ public class Client implements IClientCli, Runnable {
 			return "[[ You already are registered fo pms. ]]";
 		}
 
-		this.server = new PrivateServer(privateAddress, this);
-		this.main_threadPool.execute(this.server);
+		URI uri = null;
+		try {
+			uri = new URI("tcp://" + privateAddress);
+		} catch (URISyntaxException e) {
+			return "Invalid address.";
+		}
 
-		output.writeObject(new RegisterDTO(privateAddress));
-		output.flush();
+		if (uri.getPath() != "") {
+			return "Invalid address.";
+		}
+
+		if (uri.getPort() == -1) {
+			return "Invalid port.";
+		}
+
+		InetAddress addr = null;
+		try {
+			addr = InetAddress.getByName(uri.getHost());
+		} catch (UnknownHostException e) {
+			return "Unkown host.";
+		}
+
+		server = new PrivateServer(addr, uri.getPort(), shell);
+		serverThread = new Thread(server);
+		serverThread.run();
+
+		oos.writeObject(new RegisterDTO(privateAddress));
+		oos.flush();
 
 		return "[[ Registered! ]]";
 	}
@@ -230,159 +257,23 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String exit() throws IOException {
-
 		this.logout();
 
-		if (this.output != null) {
-			this.output.close();
+		if (this.oos != null) {
+			this.oos.close();
 		}
 
 		/* close sockets */
-		this.tcp_socket.close();
-		this.udp_socket.close();
+		this.socket.close();
+		this.datagramSocket.close();
 
 		/* shutdown thread pools */
-		this.main_threadPool.shutdownNow();
-		this.tcp_threadPool.shutdownNow();
+		this.serverThread.interrupt();
+		this.udpThread.interrupt();
 
 		Thread.currentThread().interrupt();
 
 		return "[[ Going down for shutdown now! ]]";
-	}
-
-	public Shell getShell() {
-		return this.shell;
-	}
-
-	public ExecutorService getTCPThreadPool() {
-		return this.tcp_threadPool;
-	}
-
-	public String getLastMsg() {
-		return this.lastPublicMessage;
-	}
-
-	public void setLastMsg(String lastMsg) {
-		this.lastPublicMessage = lastMsg;
-	}
-
-	/**
-	 * @param args
-	 *            the first argument is the name of the {@link Client} component
-	 */
-	public static void main(String[] args) {
-		SecurityUtils.registerBouncyCastle();
-
-		Client client = new Client(args[0], new Config("client"), System.in, System.out);
-
-		Thread mainThread = new Thread(client);
-		mainThread.start();
-
-		try {
-			mainThread.join();
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-		}
-	}
-
-	class UDP_Thread implements Runnable {
-		private Client client;
-
-		public UDP_Thread(Client client) {
-			this.client = client;
-		}
-
-		public void run() {
-			byte[] buffer;
-			String request = "!list", response;
-			InetAddress address = null;
-			try {
-				address = InetAddress.getByName(client.hostname);
-			} catch (UnknownHostException e1) {
-				e1.printStackTrace();
-			}
-
-			buffer = new byte[1024];
-			try {
-				buffer = request.getBytes();
-				DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, client.udp_port);
-				udp_socket.send(packet);
-
-				buffer = new byte[1024];
-				packet = new DatagramPacket(buffer, buffer.length);
-				udp_socket.receive(packet);
-				response = new String(packet.getData(), 0, packet.getLength()).trim();
-
-				client.shell.writeLine(response);
-
-			} catch (IOException e) {
-
-			}
-		}
-	}
-
-	class TCP_Thread implements Runnable {
-		private final Client client;
-		private final InputStream is;
-		private ObjectInputStream ois;
-
-		public TCP_Thread(Client client, InputStream is) {
-			this.client = client;
-			this.is = is;
-		}
-
-		public void run() {
-			if (is == null) {
-				return;
-			}
-
-			try {
-				ois = new ObjectInputStream(is);
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
-
-			System.out.println("TCPThread started");
-
-			try {
-				Object o = null;
-				while (!Thread.currentThread().isInterrupted()) {
-					try {
-						o = ois.readObject();
-					} catch (SocketException e) {
-						e.printStackTrace();
-						ois.close();
-						break;
-					}
-
-					if (o instanceof LoggedOutDTO) {
-						shell.writeLine(((LoggedOutDTO) o).getMessage());
-					} else if (o instanceof LookedUpDTO) {
-						String new_address = ((LookedUpDTO) o).getMessage();
-						String username = ((LookedUpDTO) o).getRequest().getUsername();
-
-						if (this.client.myContacts.containsKey(username)) {
-							this.client.myContacts.remove(username);
-						}
-
-						this.client.myContacts.put(username, new_address);
-						shell.writeLine(new_address);
-					} else if (o instanceof RegisteredDTO) {
-						shell.writeLine(((RegisteredDTO) o).getMessage());
-					} else if (o instanceof SentDTO) {
-						this.client.setLastMsg(((SentDTO) o).getMessage());
-						shell.writeLine(((SentDTO) o).getMessage());
-					} else if (o instanceof ErrorResponseDTO) {
-						shell.writeLine(((ErrorResponseDTO) o).getMessage());
-					}
-				}
-
-				ois.close();
-			} catch (IOException | ClassNotFoundException e) {
-				e.printStackTrace();
-			}
-		}
 	}
 
 	@Command
@@ -406,7 +297,7 @@ public class Client implements IClientCli, Runnable {
 		PrivateKey priv = Keys.readPrivatePEM(privateKeyFile);
 		PublicKey pub = Keys.readPublicPEM(publicKeyFile);
 
-		InputStream is = tcp_socket.getInputStream();
+		InputStream is = socket.getInputStream();
 
 		Cipher cipher = null;
 		try {
@@ -442,7 +333,7 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		// Send off the first message.
-		tcp_socket.getOutputStream().write(message);
+		socket.getOutputStream().write(message);
 
 		// Now prepare to receive the second message, so set up everything for
 		// decryption.
@@ -517,9 +408,9 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		// Send off the third message. Handshake is completed.
-		tcp_socket.getOutputStream().write(message);
+		socket.getOutputStream().write(message);
 
-		this.output = new ObjectOutputStream(new CipherOutputStream(tcp_socket.getOutputStream(), cipher));
+		this.oos = new ObjectOutputStream(new CipherOutputStream(socket.getOutputStream(), cipher));
 
 		Cipher decryptionCipher = null;
 		try {
@@ -536,8 +427,110 @@ public class Client implements IClientCli, Runnable {
 			e.printStackTrace();
 		}
 
-		this.main_threadPool.execute(new TCP_Thread(this, new CipherInputStream(is, decryptionCipher)));
+		ois = new ObjectInputStream(new CipherInputStream(is, decryptionCipher));
+
+		this.listenThread = new Thread(new Listener());
+		this.listenThread.run();
 
 		return null;
 	}
+
+	class UDPThread implements Runnable {
+		private Client client;
+
+		public UDPThread(Client client) {
+			this.client = client;
+		}
+
+		public void run() {
+			byte[] buffer;
+			String request = "!list", response;
+			InetAddress address = null;
+			try {
+				address = InetAddress.getByName(client.hostname);
+			} catch (UnknownHostException e1) {
+				e1.printStackTrace();
+			}
+
+			buffer = new byte[1024];
+			try {
+				buffer = request.getBytes();
+				DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, client.udp_port);
+				datagramSocket.send(packet);
+
+				buffer = new byte[1024];
+				packet = new DatagramPacket(buffer, buffer.length);
+				datagramSocket.receive(packet);
+				response = new String(packet.getData(), 0, packet.getLength()).trim();
+
+				client.shell.writeLine(response);
+
+			} catch (IOException e) {
+
+			}
+		}
+	}
+
+	class Listener implements Runnable {
+		@Override
+		public void run() {
+			try {
+				Object o = null;
+				while (!Thread.currentThread().isInterrupted()) {
+					try {
+						o = ois.readObject();
+					} catch (SocketException e) {
+						e.printStackTrace();
+						ois.close();
+						break;
+					}
+
+					if (o instanceof LoggedOutDTO) {
+						shell.writeLine(((LoggedOutDTO) o).getMessage());
+					} else if (o instanceof LookedUpDTO) {
+						String new_address = ((LookedUpDTO) o).getMessage();
+						String username = ((LookedUpDTO) o).getRequest().getUsername();
+
+						if (myContacts.containsKey(username)) {
+							myContacts.remove(username);
+						}
+
+						myContacts.put(username, new_address);
+						shell.writeLine(new_address);
+					} else if (o instanceof RegisteredDTO) {
+						shell.writeLine(((RegisteredDTO) o).getMessage());
+					} else if (o instanceof SentDTO) {
+						lastPublicMessage = ((SentDTO) o).getMessage();
+						shell.writeLine(((SentDTO) o).getMessage());
+					} else if (o instanceof ErrorResponseDTO) {
+						shell.writeLine(((ErrorResponseDTO) o).getMessage());
+					}
+				}
+
+				ois.close();
+			} catch (IOException | ClassNotFoundException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	/**
+	 * @param args
+	 *            the first argument is the name of the {@link Client} component
+	 */
+	public static void main(String[] args) {
+		SecurityUtils.registerBouncyCastle();
+
+		Client client = new Client(args[0], new Config("client"), System.in, System.out);
+
+		Thread mainThread = new Thread(client);
+		mainThread.start();
+
+		try {
+			mainThread.join();
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+
 }
