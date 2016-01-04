@@ -1,14 +1,14 @@
-package datatransfer;
+package dto;
 
 import java.io.Serializable;
 
-public class SendDTO implements Serializable{
+public class SentDTO implements Serializable {
 
-	private static final long serialVersionUID = -1745505969335661293L;
+	private static final long serialVersionUID = -2266836023086302854L;
 
 	private String message;
 
-	public SendDTO(String message) {
+	public SentDTO(String message) {
 		super();
 		this.message = message;
 	}
@@ -20,4 +20,6 @@ public class SendDTO implements Serializable{
 	public void setMessage(String message) {
 		this.message = message;
 	}
+
+
 }

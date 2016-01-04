@@ -4,14 +4,14 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 
-import datatransfer.LoggedOutDTO;
-import datatransfer.LogoutDTO;
-import datatransfer.LookedUpDTO;
-import datatransfer.LookupDTO;
-import datatransfer.RegisterDTO;
-import datatransfer.RegisteredDTO;
-import datatransfer.SendDTO;
-import datatransfer.SentDTO;
+import dto.LoggedOutDTO;
+import dto.LogoutDTO;
+import dto.LookedUpDTO;
+import dto.LookupDTO;
+import dto.RegisterDTO;
+import dto.RegisteredDTO;
+import dto.SendDTO;
+import dto.SentDTO;
 
 public class Session implements Runnable {
 	private final Chatserver server;
