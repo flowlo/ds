@@ -88,6 +88,7 @@ public class PrivateServer implements Runnable {
 			try {
 				while ((o = input.readObject()) != null) {
 					if(o instanceof MsgDTO){
+						//DO HMAC Stuff
 						this.client.getShell().writeLine(((MsgDTO) o).getMessage());
 					};
 				}
