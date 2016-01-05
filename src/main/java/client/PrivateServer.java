@@ -6,47 +6,55 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.UnknownHostException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-import cli.Shell;
-import dto.MsgDTO;
+import datatransfer.MsgDTO;
 
 public class PrivateServer implements Runnable {
-	private final Shell shell;
-	private final InetAddress address;
-	private final int port;
-	
-	private final ExecutorService threadPool = Executors.newCachedThreadPool();
 
 	private ServerSocket serverSocket;
 
-	public PrivateServer(InetAddress address, int port, Shell shell) {
-		this.address = address;
-		this.port = port;
-		this.shell = shell;
+	private Client client;
+
+	private int port = 0;
+	private String address = "";
+
+	public PrivateServer(String address, Client client){
+		String[] input = address.split(":");
+
+		this.port = Integer.parseInt(input[1]);
+		this.address = input[0];
+
+		this.client = client;
 	}
 
-	public void run() {
+	public void run(){
+		InetAddress addr = null;
 		try {
-			this.serverSocket = new ServerSocket(port, 4, address);
-		} catch (IOException e) {
+			addr = InetAddress.getByName(this.address);
+		} catch (UnknownHostException e) {
 			e.printStackTrace();
-			return;
 		}
 
+		try {
+			this.serverSocket = new ServerSocket(port, 1024, addr);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+
+		System.out.println("TCP_Thread started");
 		Socket socket = null;
 
-		while (!Thread.currentThread().isInterrupted()) {
+		while(!Thread.currentThread().isInterrupted()){
 			try {
 				socket = serverSocket.accept();
-				threadPool.execute(new ClientHandler(socket));
+				client.getTCPThreadPool().execute(new ClientHandler(socket, this.client));
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
 		}
 
-		if (socket != null && !socket.isClosed()) {
+		if(socket!=null && !socket.isClosed()){
 			try {
 				socket.close();
 			} catch (IOException e) {
@@ -60,8 +68,11 @@ public class PrivateServer implements Runnable {
 
 	class ClientHandler implements Runnable {
 		private ObjectInputStream input;
+		private Client client;
 
-		ClientHandler(Socket socket) {
+		ClientHandler (Socket socket, Client client){
+			this.client = client;
+
 			try {
 				this.input = new ObjectInputStream(socket.getInputStream());
 			} catch (IOException e) {
@@ -71,15 +82,19 @@ public class PrivateServer implements Runnable {
 			System.out.println("Incoming Handler for private message established.");
 		}
 
+
 		public void run(){
 			Object o;
 			try {
 				while ((o = input.readObject()) != null) {
 					if (o instanceof MsgDTO) {
+						// DO HMAC Stuff
 						shell.writeLine(((MsgDTO) o).getMessage());
 					}
 				}
-			} catch(IOException|ClassNotFoundException e) {
+			}catch(IOException e){
+				e.printStackTrace();
+			} catch (ClassNotFoundException e) {
 				e.printStackTrace();
 			}
 		}

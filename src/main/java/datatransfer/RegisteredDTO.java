@@ -1,4 +1,4 @@
-package dto;
+package datatransfer;
 
 import java.io.Serializable;
 
