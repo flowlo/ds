@@ -12,18 +12,16 @@ import javax.crypto.Mac;
 
 import java.util.Base64;
 
-
 /**
  * Helper Class to generate/check Hmac Hash
+ *
  * @author Nikloaus Laessig, Lorenz Leutgeb, Christoph Gwihs
  *
  */
 public class HmacUtil {
-	private static String algorithmen = "HmacSHA256";
-	
 	private Mac hmac = null;
-	
-	public HmacUtil(String keyFile){
+
+	public HmacUtil(String keyFile) {
 		File file = new File(keyFile);
 		Key key = null;
 		try {
@@ -32,40 +30,35 @@ public class HmacUtil {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		
+
 		try {
-			hmac = Mac.getInstance(algorithmen);
+			hmac = Mac.getInstance("HmacSHA256");
 			hmac.init(key);
-		}catch(NoSuchAlgorithmException e){
+		} catch (NoSuchAlgorithmException|InvalidKeyException e) {
 			e.printStackTrace();
-		}catch(InvalidKeyException ie){
-			ie.printStackTrace();
 		}
 	}
-	
+
 	/**
-	 * Generates an base64 Encoded HmacSHA256 Hash for given 
-	 * message
+	 * Generates an base64 Encoded HmacSHA256 Hash for given message
+	 *
 	 * @param message
 	 * @return
 	 */
-	public String generateHash(String message){
-		String hashB64 = Base64.getEncoder().encodeToString(generateHashAsByteArray(message));
-		return hashB64;
+	public String generateHash(String message) {
+		return Base64.getEncoder().encodeToString(generateHashAsByteArray(message));
 	}
-	
+
 	/**
 	 * 
 	 * @param message
 	 * @return
 	 */
-	private byte[] generateHashAsByteArray(String message){
+	private byte[] generateHashAsByteArray(String message) {
 		hmac.update(message.getBytes());
-		byte[] hash = hmac.doFinal();
-
-		return hash;
+		return hmac.doFinal();
 	}
-	
+
 	/**
 	 * Checks if a message has the same hmac hash as the provided one
 	 * @param message
@@ -73,12 +66,12 @@ public class HmacUtil {
 	 * @return true  - if generated and provided hash are equals
 	 * 		   false - otherwise
 	 */
-	public Boolean checkHash(String message, String hash){
+	public Boolean checkHash(String message, String hash) {
 		byte[] recceivedHash = Base64.getDecoder().decode(hash);
-		if(MessageDigest.isEqual(this.generateHashAsByteArray(message),recceivedHash)){
-			return true;
-		}else{
-			return false;
-		}
+		return MessageDigest.isEqual(this.generateHashAsByteArray(message), recceivedHash);
+	}
+
+	public String prependHash(String message) {
+		return generateHash(message) + " " + message;
 	}
 }
