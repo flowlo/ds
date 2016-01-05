@@ -90,9 +90,9 @@ public class PrivateServer implements Runnable {
 						shell.writeLine("Received message: " + message);
 						message = hmac.generateHash("!ack");
 					} else {
-						message = hmac.generateHash("!tampered " + message);
+						message = hmac.prependHash("!tampered " + message);
 					}
-
+					
 					os.write(message.getBytes());
 					os.flush();
 				}				
