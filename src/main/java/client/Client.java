@@ -186,12 +186,24 @@ public class Client implements IClientCli, Runnable {
 		os.write(message.getBytes());
 		os.flush();
 
-		// TODO: Listen for tamper notice on the connection (wait for it to
-		// close).
+		InputStream is = socket.getInputStream();
+		byte[] buf = new byte[1024];
+		int len = is.read(buf);
+		message = new String(buf, 0, len);
+		String hash = message.substring(0, 44);
+		String payload = message.substring(45);
+
+		if (!hmac.checkHash(payload, hash)) {
+			shell.writeLine("Incoming message from " + username + " was tampered.");
+		} else  if (payload.equals("!ack")) {
+			shell.writeLine(username + " replied with !ack.");
+		} else {
+			shell.writeLine(username + " signalled tampering of our message!");
+		}
 
 		socket.close();
 
-		return "Message sent.";
+		return null;
 	}
 
 	@Override

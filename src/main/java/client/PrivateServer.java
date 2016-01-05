@@ -12,7 +12,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import cli.Shell;
-import dto.MsgDTO;
 import util.HmacUtil;
 
 public class PrivateServer implements Runnable {
@@ -81,14 +80,22 @@ public class PrivateServer implements Runnable {
 				String message = new String(buf, 0, len);
 				String hash = message.substring(0, 44);
 				String payload = message.substring(45);
-				System.err.println("GOT HASH " + hash);
-				System.err.println("GOT PAYLOAD " + payload);
 
-				if (hmac.checkHash(payload, hash)) {
-					shell.writeLine("Received message: " + payload.substring(4));
+				if (!payload.startsWith("!msg ")) {
+					shell.writeLine("Received bogus message. Ignoring.");
 				} else {
-					// TODO: Reply with a "!tampered" message to signal HMAC error.
-				}
+					message = payload.substring(4);
+
+					if (hmac.checkHash(payload, hash)) {
+						shell.writeLine("Received message: " + message);
+						message = hmac.generateHash("!ack");
+					} else {
+						message = hmac.generateHash("!tampered " + message);
+					}
+
+					os.write(message.getBytes());
+					os.flush();
+				}				
 				os.close();
 			} catch(IOException e) {
 				e.printStackTrace();
