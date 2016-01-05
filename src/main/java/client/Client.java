@@ -1,5 +1,6 @@
 package client;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -10,33 +11,52 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.IvParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+
+import org.bouncycastle.util.encoders.Base64;
+
 import cli.Command;
 import cli.Shell;
-import datatransfer.ErrorResponseDTO;
-import datatransfer.LoggedInDTO;
-import datatransfer.LoggedOutDTO;
-import datatransfer.LoginDTO;
-import datatransfer.LogoutDTO;
-import datatransfer.LookedUpDTO;
-import datatransfer.LookupDTO;
-import datatransfer.MsgDTO;
-import datatransfer.RegisterDTO;
-import datatransfer.RegisteredDTO;
-import datatransfer.SendDTO;
-import datatransfer.SentDTO;
+import common.CipherInputStream;
+import common.CipherOutputStream;
+import dto.ErrorResponseDTO;
+import dto.LoggedOutDTO;
+import dto.LogoutDTO;
+import dto.LookedUpDTO;
+import dto.LookupDTO;
+import dto.MsgDTO;
+import dto.RegisterDTO;
+import dto.RegisteredDTO;
+import dto.SendDTO;
+import dto.SentDTO;
 import util.Config;
+import util.Keys;
+import util.SecurityUtils;
 
 public class Client implements IClientCli, Runnable {
 
-	private String componentName;
-	private Config config;
-	private InputStream userRequestStream;
-	private PrintStream userResponseStream;
+	private final String componentName;
+	private final Config config;
+	private final InputStream userRequestStream;
+	private final PrintStream userResponseStream;
 
 	private Shell shell;
 
@@ -46,19 +66,19 @@ public class Client implements IClientCli, Runnable {
 
 	private String lastPublicMessage;
 
-	private Socket tcp_socket;
-	private DatagramSocket udp_socket;
+	private Socket socket;
+	private DatagramSocket datagramSocket;
 
-	private ExecutorService main_threadPool = Executors.newFixedThreadPool(2);
-
-	private ExecutorService tcp_threadPool = Executors.newCachedThreadPool();
+	private Thread listenThread;
+	private Thread udpThread;
 
 	private PrivateServer server = null;
+	private Thread serverThread;
 
 	private ConcurrentHashMap<String, String> myContacts;
 
-	private ObjectOutputStream output = null;
-	private ObjectInputStream input = null;
+	private ObjectOutputStream oos = null;
+	private ObjectInputStream ois = null;
 
 	/**
 	 * @param componentName
@@ -98,7 +118,7 @@ public class Client implements IClientCli, Runnable {
 		this.udp_port = config.getInt("chatserver.udp.port");
 
 		try {
-			this.tcp_socket = new Socket(this.hostname, this.tcp_port);
+			this.socket = new Socket(this.hostname, this.tcp_port);
 		} catch (UnknownHostException e) {
 			e.printStackTrace();
 		} catch (IOException e) {
@@ -106,42 +126,22 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		try {
-			this.udp_socket = new DatagramSocket();
+			this.datagramSocket = new DatagramSocket();
 		} catch (SocketException e) {
 			e.printStackTrace();
 		}
-
-		this.main_threadPool.execute(new TCP_Thread(this));
-
 	}
 
 	@Override
-	@Command
 	public String login(String username, String password) throws IOException {
-
-		try {
-			output = new ObjectOutputStream(tcp_socket.getOutputStream());
-		} catch (IOException e1) {
-			e1.printStackTrace();
-		}
-
-		output.writeObject(new LoginDTO(username, password));
-		output.flush();
-
 		return null;
 	}
 
 	@Override
 	@Command
 	public String logout() throws IOException {
-		try {
-			output = new ObjectOutputStream(tcp_socket.getOutputStream());
-		} catch (IOException e1) {
-			e1.printStackTrace();
-		}
-
-		output.writeObject(new LogoutDTO());
-		output.flush();
+		oos.writeObject(new LogoutDTO());
+		oos.flush();
 
 		return null;
 	}
@@ -150,15 +150,8 @@ public class Client implements IClientCli, Runnable {
 	@Command
 	public String send(String message) throws IOException {
 		this.lastPublicMessage = message;
-
-		try {
-			output = new ObjectOutputStream(tcp_socket.getOutputStream());
-		} catch (IOException e1) {
-			e1.printStackTrace();
-		}
-
-		output.writeObject(new SendDTO(message));
-		output.flush();
+		oos.writeObject(new SendDTO(message));
+		oos.flush();
 
 		return null;
 	}
@@ -166,7 +159,8 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String list() throws IOException {
-		this.main_threadPool.execute(new UDP_Thread(this));
+		this.udpThread = new Thread(new UDPThread(this));
+		this.udpThread.run();
 		return null;
 	}
 
@@ -209,14 +203,8 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String lookup(String username) throws IOException {
-		try {
-			output = new ObjectOutputStream(tcp_socket.getOutputStream());
-		} catch (IOException e1) {
-			e1.printStackTrace();
-		}
-
-		output.writeObject(new LookupDTO(username));
-		output.flush();
+		oos.writeObject(new LookupDTO(username));
+		oos.flush();
 
 		return null;
 	}
@@ -228,17 +216,34 @@ public class Client implements IClientCli, Runnable {
 			return "[[ You already are registered fo pms. ]]";
 		}
 
-		this.server = new PrivateServer(privateAddress, this);
-		this.main_threadPool.execute(this.server);
-
+		URI uri = null;
 		try {
-			output = new ObjectOutputStream(tcp_socket.getOutputStream());
-		} catch (IOException e1) {
-			e1.printStackTrace();
+			uri = new URI("tcp://" + privateAddress);
+		} catch (URISyntaxException e) {
+			return "Invalid address.";
 		}
 
-		output.writeObject(new RegisterDTO(privateAddress));
-		output.flush();
+		if (uri.getPath() != "") {
+			return "Invalid address.";
+		}
+
+		if (uri.getPort() == -1) {
+			return "Invalid port.";
+		}
+
+		InetAddress addr = null;
+		try {
+			addr = InetAddress.getByName(uri.getHost());
+		} catch (UnknownHostException e) {
+			return "Unkown host.";
+		}
+
+		server = new PrivateServer(addr, uri.getPort(), shell);
+		serverThread = new Thread(server);
+		serverThread.run();
+
+		oos.writeObject(new RegisterDTO(privateAddress));
+		oos.flush();
 
 		return "[[ Registered! ]]";
 	}
@@ -252,67 +257,188 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String exit() throws IOException {
-
 		this.logout();
 
-		if (this.output != null) {
-			this.output.close();
-		}
-
-		if (this.input != null) {
-			this.input.close();
+		if (this.oos != null) {
+			this.oos.close();
 		}
 
 		/* close sockets */
-		this.tcp_socket.close();
-		this.udp_socket.close();
+		this.socket.close();
+		this.datagramSocket.close();
 
 		/* shutdown thread pools */
-		this.main_threadPool.shutdownNow();
-		this.tcp_threadPool.shutdownNow();
+		this.serverThread.interrupt();
+		this.udpThread.interrupt();
 
 		Thread.currentThread().interrupt();
 
 		return "[[ Going down for shutdown now! ]]";
 	}
 
-	public Shell getShell() {
-		return this.shell;
-	}
+	@Command
+	@Override
+	public String authenticate(String username) throws IOException {
+		File privateKeyFile = new File(config.getString("keys.dir"), username + ".pem");
+		if (!privateKeyFile.exists()) {
+			shell.writeLine("Could not find private key file for username \"" + username + "\".");
+			return null;
+		}
 
-	public ExecutorService getTCPThreadPool() {
-		return this.tcp_threadPool;
-	}
+		File publicKeyFile = new File(config.getString("chatserver.key"));
+		if (!publicKeyFile.exists()) {
+			shell.writeLine("Could not find server's public key.");
+			return null;
+		}
 
-	public String getLastMsg() {
-		return this.lastPublicMessage;
-	}
+		// Initialize key material. We'll need the public key of the server
+		// to encrypt the first message, and our own private key to decrypt
+		// the second message.
+		PrivateKey priv = Keys.readPrivatePEM(privateKeyFile);
+		PublicKey pub = Keys.readPublicPEM(publicKeyFile);
 
-	public void setLastMsg(String lastMsg) {
-		this.lastPublicMessage = lastMsg;
-	}
+		InputStream is = socket.getInputStream();
 
-	/**
-	 * @param args
-	 *            the first argument is the name of the {@link Client} component
-	 */
-	public static void main(String[] args) {
-		Client client = new Client(args[0], new Config("client"), System.in, System.out);
-
-		Thread mainThread = new Thread(client);
-		mainThread.start();
-
+		Cipher cipher = null;
 		try {
-			mainThread.join();
-		} catch (InterruptedException e) {
+			cipher = Cipher.getInstance(SecurityUtils.ASYMMETRIC_SPEC);
+		} catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
+			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
+
+		try {
+			cipher.init(Cipher.ENCRYPT_MODE, pub);
+		} catch (InvalidKeyException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		// Obtain some random bytes used as challenge. We'll encrypt this and
+		// the server
+		// will have to send it back so we can be sure that the server decrypted
+		// the
+		// challenge using the private key that matches the public key we have.
+		String challenge = SecurityUtils.randomBytesEncoded(32);
+
+		// Construct the first message.
+		byte[] message = ("!authenticate " + username + " " + challenge).getBytes();
+
+		// Encrypt and encode the first message.
+		try {
+			message = Base64.encode(cipher.doFinal(message));
+		} catch (IllegalBlockSizeException | BadPaddingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		// Send off the first message.
+		socket.getOutputStream().write(message);
+
+		// Now prepare to receive the second message, so set up everything for
+		// decryption.
+		try {
+			cipher.init(Cipher.DECRYPT_MODE, priv);
+		} catch (InvalidKeyException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		// Receive the second message.
+		message = new byte[684];
+		int messageLen = 0;
+		try {
+			messageLen = is.read(message);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		// Decode and decrypt the second message.
+		message = Base64.decode(Arrays.copyOfRange(message, 0, messageLen));
+		try {
+			message = cipher.doFinal(message);
+		} catch (IllegalBlockSizeException | BadPaddingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		String[] params = new String(message).split(" ");
+
+		if (params == null || params.length != 5 || !params[0].equals("!ok")) {
+			shell.writeLine("Handshake failed (malformed message).");
+			return null;
+		}
+
+		if (!params[1].equals(challenge)) {
+			shell.writeLine("Handshake failed (wrong challenge: " + params[1] + " != " + challenge + ").");
+			return null;
+		}
+
+		// Now that we have verified our part of the challenge,
+		// we have to authenticate to the server by encrypting it.
+		challenge = params[2];
+
+		// Extract parameters for symmetric channel.
+		byte[] secret = Base64.decode(params[3].getBytes());
+		byte[] iv = Base64.decode(params[4].getBytes());
+
+		// Override cipher, as communication is symmetrically encrypted from
+		// this
+		// point on.
+		try {
+			cipher = Cipher.getInstance(SecurityUtils.SYMMETRIC_SPEC);
+		} catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		try {
+			cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(secret, "AES"), new IvParameterSpec(iv));
+		} catch (InvalidKeyException | InvalidAlgorithmParameterException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		try {
+			message = Base64.encode(cipher.doFinal(challenge.getBytes()));
+		} catch (IllegalBlockSizeException | BadPaddingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		// Send off the third message. Handshake is completed.
+		socket.getOutputStream().write(message);
+
+		this.oos = new ObjectOutputStream(new CipherOutputStream(socket.getOutputStream(), cipher));
+
+		Cipher decryptionCipher = null;
+		try {
+			decryptionCipher = Cipher.getInstance(SecurityUtils.SYMMETRIC_SPEC);
+		} catch (NoSuchAlgorithmException | NoSuchPaddingException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		try {
+			decryptionCipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(secret, "AES"), new IvParameterSpec(iv));
+		} catch (InvalidKeyException | InvalidAlgorithmParameterException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		ois = new ObjectInputStream(new CipherInputStream(is, decryptionCipher));
+
+		this.listenThread = new Thread(new Listener());
+		this.listenThread.run();
+
+		return null;
 	}
 
-	class UDP_Thread implements Runnable {
+	class UDPThread implements Runnable {
 		private Client client;
 
-		public UDP_Thread(Client client) {
+		public UDPThread(Client client) {
 			this.client = client;
 		}
 
@@ -330,11 +456,11 @@ public class Client implements IClientCli, Runnable {
 			try {
 				buffer = request.getBytes();
 				DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, client.udp_port);
-				udp_socket.send(packet);
+				datagramSocket.send(packet);
 
 				buffer = new byte[1024];
 				packet = new DatagramPacket(buffer, buffer.length);
-				udp_socket.receive(packet);
+				datagramSocket.receive(packet);
 				response = new String(packet.getData(), 0, packet.getLength()).trim();
 
 				client.shell.writeLine(response);
@@ -345,69 +471,66 @@ public class Client implements IClientCli, Runnable {
 		}
 	}
 
-	class TCP_Thread implements Runnable {
-		private Client client;
-
-		public TCP_Thread(Client client) {
-			this.client = client;
-		}
-
+	class Listener implements Runnable {
+		@Override
 		public void run() {
-			System.out.println("TCP_Thread started");
-
 			try {
-
 				Object o = null;
-				while (!Thread.currentThread().isInterrupted() && tcp_socket != null
-						&& tcp_socket.getInputStream() != null) {
-
-					input = new ObjectInputStream(tcp_socket.getInputStream());
+				while (!Thread.currentThread().isInterrupted()) {
 					try {
-						o = input.readObject();
-					} catch (java.net.SocketException e) {
-						input.close();
+						o = ois.readObject();
+					} catch (SocketException e) {
+						e.printStackTrace();
+						ois.close();
 						break;
 					}
 
-					if (o instanceof LoggedInDTO) {
-						shell.writeLine(((LoggedInDTO) o).getMessage());
-					} else if (o instanceof LoggedInDTO) {
-						shell.writeLine(((LoggedInDTO) o).getMessage());
-					} else if (o instanceof LoggedOutDTO) {
+					if (o instanceof LoggedOutDTO) {
 						shell.writeLine(((LoggedOutDTO) o).getMessage());
 					} else if (o instanceof LookedUpDTO) {
 						String new_address = ((LookedUpDTO) o).getMessage();
 						String username = ((LookedUpDTO) o).getRequest().getUsername();
 
-						if (this.client.myContacts.containsKey(username)) {
-							this.client.myContacts.remove(username);
+						if (myContacts.containsKey(username)) {
+							myContacts.remove(username);
 						}
 
-						this.client.myContacts.put(username, new_address);
+						myContacts.put(username, new_address);
 						shell.writeLine(new_address);
 					} else if (o instanceof RegisteredDTO) {
 						shell.writeLine(((RegisteredDTO) o).getMessage());
 					} else if (o instanceof SentDTO) {
-						this.client.setLastMsg(((SentDTO) o).getMessage());
+						lastPublicMessage = ((SentDTO) o).getMessage();
 						shell.writeLine(((SentDTO) o).getMessage());
 					} else if (o instanceof ErrorResponseDTO) {
 						shell.writeLine(((ErrorResponseDTO) o).getMessage());
 					}
 				}
 
-				input.close();
+				ois.close();
 			} catch (IOException | ClassNotFoundException e) {
 				e.printStackTrace();
 			}
 		}
 	}
 
-	// --- Commands needed for Lab 2. Please note that you do not have to
-	// implement them for the first submission. ---
+	/**
+	 * @param args
+	 *            the first argument is the name of the {@link Client} component
+	 */
+	public static void main(String[] args) {
+		SecurityUtils.registerBouncyCastle();
 
-	@Override
-	public String authenticate(String username) throws IOException {
-		// TODO Auto-generated method stub
-		return null;
+		Client client = new Client(args[0], new Config("client"), System.in, System.out);
+
+		Thread mainThread = new Thread(client);
+		mainThread.start();
+
+		try {
+			mainThread.join();
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
 	}
+
 }
