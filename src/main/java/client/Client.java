@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -42,12 +43,12 @@ import dto.LoggedOutDTO;
 import dto.LogoutDTO;
 import dto.LookedUpDTO;
 import dto.LookupDTO;
-import dto.MsgDTO;
 import dto.RegisterDTO;
 import dto.RegisteredDTO;
 import dto.SendDTO;
 import dto.SentDTO;
 import util.Config;
+import util.HmacUtil;
 import util.Keys;
 import util.SecurityUtils;
 
@@ -80,6 +81,8 @@ public class Client implements IClientCli, Runnable {
 	private ObjectOutputStream oos = null;
 	private ObjectInputStream ois = null;
 
+	private HmacUtil hmac;
+
 	/**
 	 * @param componentName
 	 *            the name of the component - represented in the prompt
@@ -102,6 +105,8 @@ public class Client implements IClientCli, Runnable {
 		this.shell.register(this);
 
 		this.myContacts = new ConcurrentHashMap<String, String>();
+
+		this.hmac = new HmacUtil(config.getString("hmac.key"));
 	}
 
 	@Override
@@ -168,34 +173,25 @@ public class Client implements IClientCli, Runnable {
 		String address = this.myContacts.get(username);
 
 		if (address == null) {
-			return "[[ Not able to send message to " + username + " ]]";
+			return "Address for user \"" + username + "\" unknown. Maybe lookup first?";
 		}
-
-		Socket socket = null;
 
 		String hostname = address.split(":")[0];
 		String port = address.split(":")[1];
 
-		try {
-			socket = new Socket(hostname, Integer.parseInt(port));
-		} catch (UnknownHostException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+		Socket socket = new Socket(hostname, Integer.parseInt(port));
 
-		ObjectOutputStream output = null;
+		OutputStream os = socket.getOutputStream();
+		message = hmac.prependHash("!msg " + message);
+		os.write(message.getBytes());
+		os.flush();
 
-		try {
-			output = new ObjectOutputStream(socket.getOutputStream());
-		} catch (IOException e1) {
-			e1.printStackTrace();
-		}
+		// TODO: Listen for tamper notice on the connection (wait for it to
+		// close).
 
-		output.writeObject(new MsgDTO(username, message));
-		output.flush();
+		socket.close();
 
-		return "[[ Successfully sent.]]";
+		return "Message sent.";
 	}
 
 	@Override
@@ -235,7 +231,7 @@ public class Client implements IClientCli, Runnable {
 			return "Unkown host.";
 		}
 
-		server = new PrivateServer(addr, uri.getPort(), shell);
+		server = new PrivateServer(addr, uri.getPort(), shell, hmac);
 		serverThread = new Thread(server);
 		serverThread.start();
 
