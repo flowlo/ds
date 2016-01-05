@@ -88,11 +88,11 @@ public class PrivateServer implements Runnable {
 
 					if (hmac.checkHash(payload, hash)) {
 						shell.writeLine("Received message: " + message);
-						message = hmac.generateHash("!ack");
+						message = hmac.prependHash("!ack");
 					} else {
 						message = hmac.prependHash("!tampered " + message);
 					}
-					
+
 					os.write(message.getBytes());
 					os.flush();
 				}				
