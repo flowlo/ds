@@ -10,7 +10,7 @@ import java.security.NoSuchAlgorithmException;
 
 import javax.crypto.Mac;
 
-import java.util.Base64;
+import org.bouncycastle.util.encoders.Base64;
 
 /**
  * Helper Class to generate/check Hmac Hash
@@ -46,7 +46,7 @@ public class HmacUtil {
 	 * @return
 	 */
 	public String generateHash(String message) {
-		return Base64.getEncoder().encodeToString(generateHashAsByteArray(message));
+		return (Base64.encode(generateHashAsByteArray(message))).toString();
 	}
 
 	/**
@@ -67,7 +67,7 @@ public class HmacUtil {
 	 * 		   false - otherwise
 	 */
 	public Boolean checkHash(String message, String hash) {
-		byte[] recceivedHash = Base64.getDecoder().decode(hash);
+		byte[] recceivedHash = Base64.decode(hash);
 		return MessageDigest.isEqual(this.generateHashAsByteArray(message), recceivedHash);
 	}
 

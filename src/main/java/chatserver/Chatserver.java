@@ -2,6 +2,11 @@ package chatserver;
 
 import java.io.*;
 import java.net.*;
+import java.rmi.AccessException;
+import java.rmi.NotBoundException;
+import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
 import java.security.*;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -17,6 +22,8 @@ import cli.Command;
 import cli.Shell;
 import common.CipherInputStream;
 import common.CipherOutputStream;
+import nameserver.INameserver;
+import nameserver.INameserverForChatserver;
 import util.Config;
 import util.Keys;
 import util.SecurityUtils;
@@ -37,6 +44,7 @@ public class Chatserver implements IChatserverCli, Runnable {
 	private DatagramSocket datagramSocket;
 
 	private Thread udpThread;
+	private Registry registry;
 
 	private ExecutorService threadPool = Executors.newCachedThreadPool();
 
@@ -126,7 +134,7 @@ public class Chatserver implements IChatserverCli, Runnable {
 			}
 		}
 
-		udpThread = new Thread(new UDPThread(this));
+		udpThread = new Thread(new UDPThread());
 		udpThread.start();
 
 		while (!Thread.currentThread().isInterrupted()) {
@@ -318,18 +326,38 @@ public class Chatserver implements IChatserverCli, Runnable {
 		ObjectInputStream ois = new ObjectInputStream(new CipherInputStream(is, encryptionCipher));
 
 		shell.writeLine("Successfully authenticated " + username);
+		
+		/*Locating Registry*/
+		String regHost = this.config.getString("registry.host");
+		int regPort = this.config.getInt("registry.port");
+		
+		try {
+			this.registry = LocateRegistry.getRegistry(regHost, regPort);
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
+		
+		String lookupName = this.config.getString("root_id");
+		
+		INameserverForChatserver rootNameserver = null;
+		
+		try {
+			rootNameserver = (INameserver) this.registry.lookup(lookupName);
+		} catch (AccessException e) {
+			e.printStackTrace();
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		} catch (NotBoundException e) {
+			e.printStackTrace();
+		}
+		
 
-		Session session = new Session(this, user, ois, oos);
+		Session session = new Session(this, user, ois, oos, rootNameserver);
 		user.getSessions().add(session);
 		return session;
 	}
 
 	private class UDPThread implements Runnable {
-		private final Chatserver server;
-
-		public UDPThread(Chatserver server) {
-			this.server = server;
-		}
 
 		public void run() {
 			byte[] buffer;

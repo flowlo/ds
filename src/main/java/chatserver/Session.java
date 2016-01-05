@@ -3,6 +3,7 @@ package chatserver;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.rmi.RemoteException;
 
 import dto.LoggedOutDTO;
 import dto.LogoutDTO;
@@ -12,18 +13,23 @@ import dto.RegisterDTO;
 import dto.RegisteredDTO;
 import dto.SendDTO;
 import dto.SentDTO;
+import nameserver.INameserverForChatserver;
+import nameserver.exceptions.AlreadyRegisteredException;
+import nameserver.exceptions.InvalidDomainException;
 
 public class Session implements Runnable {
 	private final Chatserver server;
 	private final User user;
 	private final ObjectInputStream ois;
 	private final ObjectOutputStream oos;
+	private final INameserverForChatserver rootNameserver;
 
-	public Session(Chatserver server, User user, ObjectInputStream ois, ObjectOutputStream oos) {
+	public Session(Chatserver server, User user, ObjectInputStream ois, ObjectOutputStream oos, INameserverForChatserver rootNameserver) {
 		this.server = server;
 		this.user = user;
 		this.ois = ois;
 		this.oos = oos;
+		this.rootNameserver = rootNameserver;
 	}
 
 	public boolean isOnline() {
@@ -44,16 +50,33 @@ public class Session implements Runnable {
 
 	public String processRegister(RegisterDTO dto) {
 		this.user.address = dto.getAddress();
+		
+		try {
+			this.rootNameserver.registerUser(this.user.getName(), dto.getAddress());
+		} catch (RemoteException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (AlreadyRegisteredException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (InvalidDomainException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
 		return "Successfully registered address for " + this.user.getName() + '.';
 	}
 
 	public String processLookup(LookupDTO dto) {
-		for (User user : server.getUsers()) {
-			if (!user.getName().equals(dto.getUsername())) {
-				continue;
-			}
-			return user.getAddress();
+		
+		try {
+			return this.rootNameserver.lookup(dto.getUsername());
+		} catch (RemoteException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
 		}
+		
+		
 		return null;
 	}
 
