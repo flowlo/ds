@@ -80,6 +80,8 @@ public class Client implements IClientCli, Runnable {
 
 	private ObjectOutputStream oos = null;
 	private ObjectInputStream ois = null;
+	
+	private String holdPrivateMessage = "";
 
 	private HmacUtil hmac;
 
@@ -167,26 +169,20 @@ public class Client implements IClientCli, Runnable {
 		return null;
 	}
 
-	@Override
-	@Command
-	public String msg(String username, String message) throws IOException {
-		String address = this.myContacts.get(username);
-
-		if (address == null) {
-			return "Address for user \"" + username + "\" unknown. Maybe lookup first?";
-		}
-
+	
+	private void sendPrivateMessage(String username, String address, String message) throws IOException {
 		String hostname = address.split(":")[0];
 		String port = address.split(":")[1];
 
 		Socket socket = new Socket(hostname, Integer.parseInt(port));
 
 		OutputStream os = socket.getOutputStream();
+		InputStream is = socket.getInputStream();
+		
 		message = hmac.prependHash("!msg " + message);
 		os.write(message.getBytes());
 		os.flush();
-
-		InputStream is = socket.getInputStream();
+		
 		byte[] buf = new byte[1024];
 		int len = is.read(buf);
 		message = new String(buf, 0, len);
@@ -200,8 +196,24 @@ public class Client implements IClientCli, Runnable {
 		} else {
 			shell.writeLine(username + " signalled tampering of our message!");
 		}
-
+		os.close();
+		is.close();
 		socket.close();
+	}
+	
+	@Override
+	@Command
+	public String msg(String username, String message) throws IOException {
+		String address = this.myContacts.get(username);
+
+		if (address == null) {
+			holdPrivateMessage = message;
+			lookup(username);
+			return "Address for user \"" + username + "\" unknown. Doing lookup!";
+		}else{
+			sendPrivateMessage(username,address,message);
+		}
+
 
 		return null;
 	}
@@ -433,7 +445,8 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		ois = new ObjectInputStream(new CipherInputStream(is, decryptionCipher));
-
+		
+		shell.writeLine("Successfully established secure connection with server!");
 		this.listenThread = new Thread(new Listener());
 		this.listenThread.start();
 
@@ -501,6 +514,13 @@ public class Client implements IClientCli, Runnable {
 						}
 
 						myContacts.put(username, new_address);
+						
+						if(!holdPrivateMessage.isEmpty()){
+							//Lookup was started by sending private message
+							sendPrivateMessage(username,new_address,holdPrivateMessage);
+							holdPrivateMessage = "";
+						}
+						
 						shell.writeLine(new_address);
 					} else if (o instanceof RegisteredDTO) {
 						shell.writeLine(((RegisteredDTO) o).getMessage());
