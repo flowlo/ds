@@ -3,7 +3,6 @@ package nameserver;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
-import java.io.Serializable;
 import java.rmi.AccessException;
 import java.rmi.AlreadyBoundException;
 import java.rmi.NotBoundException;
@@ -12,6 +11,7 @@ import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.registry.Registry;
 import java.rmi.server.UnicastRemoteObject;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListMap;
@@ -32,19 +32,19 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 	
 	
 	/* fields for Config & args for shell */
-	private Config config;
-	private String componentName;
-	private InputStream userRequestStream;
-	private PrintStream userResponseStream;
+	private final Config config;
+	private final String componentName;
+	private final InputStream userRequestStream;
+	private final PrintStream userResponseStream;
 
-	private Shell shell;
+	private final Shell shell;
+
+	private final ConcurrentSkipListMap<String, INameserver> zones;
+	private final ConcurrentSkipListMap<String, String> users;
 
 	private Registry registry;
 	
-	private  ConcurrentSkipListMap<String, INameserver> zones;
-	private  ConcurrentSkipListMap<String, String> users;
 	
-	private String zone;
 	private String domain;
  
 
@@ -85,24 +85,23 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		this.domain = null;
 		try{
 			this.domain = this.config.getString("domain");
-			printToShell("[[ Nameserver for " + domain + " has been started. ]]");
+			logToShell("Nameserver for " + domain + " has been started.");
 		}catch(java.util.MissingResourceException ex){
-			printToShell("[[ Root-nameserver has been started. ]]");
+			logToShell("Root-nameserver has been started.");
 		}
 		
 		
 		/* nameserver is root-nameserver */
-		if(this. domain==null){
+		if(this.domain==null){
 			String bindingName = config.getString("root_id");
 			
 			this.domain = "root-domain";
-			this.zone = "root-zone";
 			
 			/* Initialize Registry. */
 			try {
 				this.registry = LocateRegistry.createRegistry(config.getInt("registry.port"));
 			} catch (RemoteException e) {
-				this.printToShell("[[ Creating Registry failed. ]]");
+				this.logToShell("Creating Registry failed.");
 			}
 			
 			/* create remoteobject */
@@ -111,21 +110,21 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 				remoteObject = (INameserver) UnicastRemoteObject
 						.exportObject((Remote) this, 0);
 			} catch (RemoteException e1) {
-				this.printToShell("[[ Creating remote object failed. ]]");
+				this.logToShell("Creating remote object failed.");
 			}
 			
 			/* binding remoteObject to registry */
 			try {
 				registry.bind(bindingName, remoteObject);
 			} catch (AccessException e) {
-				this.printToShell("[[ Binding to registry failed: AccessException ]]");
+				this.logToShell("Binding to registry failed: AccessException");
 			} catch (RemoteException e) {
-				this.printToShell("[[ Binding to registry failed: RemoteException ]]");
+				this.logToShell("Binding to registry failed: RemoteException");
 			} catch (AlreadyBoundException e) {
-				this.printToShell("[[ Binding to registry failed: AlreadyBoundException ]]");
+				this.logToShell("Binding to registry failed: AlreadyBoundException");
 			}
 			
-			this.printToShell("[[ Bound to " + bindingName + ". ]]");
+			this.logToShell("Bound to " + bindingName + ".");
 			
 		/* nameserver is lower level */
 		}else{
@@ -135,7 +134,7 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 			try {
 				this.registry = LocateRegistry.getRegistry(regHost, regPort);
 			} catch (RemoteException e) {
-				this.printToShell("[[ Locating Registry failed. ]]");
+				this.logToShell("Locating Registry failed.");
 			}
 			
 			String lookupName = this.config.getString("root_id");
@@ -143,11 +142,11 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 			try {
 				rootServer = (INameserver) this.registry.lookup(lookupName);
 			} catch (AccessException e) {
-				this.printToShell("[[ Looking up from registry failed: AccessException ]]");
+				this.logToShell("Looking up from registry failed: AccessException" + e.getMessage());
 			} catch (RemoteException e) {
-				this.printToShell("[[ Looking up from registry failed: RemoteException ]]");
+				this.logToShell("Looking up from registry failed: RemoteException" + e.getMessage());
 			} catch (NotBoundException e) {
-				this.printToShell("[[ Looking up from registry failed: NotBoundException ]]");
+				this.logToShell("Looking up from registry failed: NotBoundException" + e.getMessage());
 			}
 			
 			/* create remoteobject */
@@ -156,20 +155,20 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 				remoteObject = (INameserver) UnicastRemoteObject
 						.exportObject((Remote) this, 0);
 			} catch (RemoteException e1) {
-				this.printToShell("[[ Creating remote object failed. ]]");
+				this.logToShell("Creating remote object failed.");
 			}
 			
 			try {
 				rootServer.registerNameserver(this.domain, remoteObject, remoteObject);
 			} catch (RemoteException e) {
-				this.printToShell("[[ Registering Nameserver failed:\n\tRemoteException: " + e.getMessage() + " ]]");
-				this.teardown();
+				this.logToShell("Registering Nameserver failed:\n\tRemoteException: " + e.getMessage());
+				this.teardown(1);
 			} catch (AlreadyRegisteredException e) {
-				this.printToShell("[[ Registering Nameserver failed:\n\tAlreadyRegisteredException: " + e.getMessage() + " ]]");
-				this.teardown();
+				this.logToShell("Registering Nameserver failed:\n\tAlreadyRegisteredException: " + e.getMessage());
+				this.teardown(2);
 			} catch (InvalidDomainException e) {
-				this.printToShell("[[ Registering Nameserver failed:\n\tInavlidDomainException: " + e.getMessage() + " ]]");
-				this.teardown();
+				this.logToShell("Registering Nameserver failed:\n\tInavlidDomainException: " + e.getMessage());
+				this.teardown(3);
 			}
 		}
 	}
@@ -229,10 +228,10 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 	@Override
 	@Command
 	public String exit() throws IOException {
-		this.teardown();
+		this.teardown(0);
 		
 		
-		return "[[ System is going down for shutdown now. ]]";
+		return "System is going down for shutdown now.";
 	}
 	
 	/**
@@ -246,12 +245,143 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 
 		new Thread(nameserver).start();
 	}
+	
+
+	@Override
+	public void registerUser(String username, String address)
+			throws RemoteException, AlreadyRegisteredException, InvalidDomainException {
+		
+		String[] splitStr = this.stripToResolve(username);
+		
+		if(splitStr == null){
+			this.logToShell("Bad Arguments for registering user passed.");
+			return;
+		}
+		
+		if(splitStr.length==1){			
+			if(this.users.get(splitStr[0]) != null){
+				throw new AlreadyRegisteredException("Already registered a user known as '" + splitStr[0] + "' . Therefore " + username + " cannot be registered on " + this.domain + ".");
+			}
+			
+			this.users.put(splitStr[0], address);
+			this.logToShell("Successfully registered user " + splitStr[0] + " to domain " + this.domain);
+			return;
+		}
+		
+		INameserver next=this.zones.get(splitStr[1]);
+		
+		if(next==null){
+			this.logToShell("No zone matching '" + splitStr[1] + "' found.");
+			throw new InvalidDomainException("No zone matching '" + splitStr[1] + "' found. Therefore " + username + " cannot be registered on " + this.domain + "." );
+		}
+		
+		this.logToShell("Came across " + this.domain + " going deeper to find " + splitStr[0]);
+		next.registerUser(splitStr[0], address);
+		
+	}
+
+	@Override
+	public INameserverForChatserver getNameserver(String zone) throws RemoteException {
+		String[] splitStr = this.stripToResolve(zone);
+		INameserver ret = null;
+		
+		if(splitStr == null){
+			this.logToShell("Bad Arguments for lookup passed.");
+			return null;
+		}
+		
+		if(splitStr.length==1){
+			ret = this.zones.get(splitStr[0]);
+			
+			if(ret == null){
+				this.logToShell("No user matching '" + zone + "' found.");
+			}
+			
+			return ret;
+		}
+		
+		INameserver next=this.zones.get(splitStr[1]);
+		
+		if(next==null){
+			this.logToShell("No zone matching '" + splitStr[1] + "' found.");
+			return null;
+		}
+		
+		this.logToShell("Came across " + this.domain + " going deeper to find " + splitStr[0]);
+		return next.getNameserver(splitStr[0]);
+	}
+
+	@Override
+	public String lookup(String username) throws RemoteException {
+		String[] splitStr = this.stripToResolve(username);
+		String ret = null;
+		
+		if(splitStr == null){
+			this.logToShell("Bad Arguments for lookup passed.");
+			return null;
+		}
+		
+		if(splitStr.length==1){
+			ret = this.users.get(splitStr[0]);
+			
+			if(ret == null){
+				this.logToShell("No user matching '" + username + "' found.");
+			}
+			
+			return ret;
+		}
+		
+		INameserver next=this.zones.get(splitStr[1]);
+		
+		if(next==null){
+			this.logToShell("No zone matching '" + splitStr[1] + "' found.");
+			return null;
+		}
+		
+		this.logToShell("Came across " + this.domain + " going deeper to find " + splitStr[0]);
+		return next.lookup(splitStr[0]);
+		
+	}
+
+	@Override
+	public void registerNameserver(String domain, INameserver nameserver,
+			INameserverForChatserver nameserverForChatserver)
+					throws RemoteException, AlreadyRegisteredException, InvalidDomainException {
+		
+		String[] splitStr = this.stripToResolve(domain);
+		
+		if(splitStr == null || nameserver == null || nameserverForChatserver == null){
+			this.logToShell("Bad Arguments for registering nameserver passed.");
+			return;
+		}
+		
+		if(splitStr.length==1){			
+			if(this.zones.get(splitStr[0]) != null){
+				throw new AlreadyRegisteredException("Already registered a nameserver known as '" + splitStr[0] + "' . Therefore " + domain + " cannot be registered on " + this.domain + ".");
+			}
+			
+			this.zones.put(splitStr[0], nameserver);
+			this.logToShell("Successfully registered zone " + splitStr[0] + " to domain " + this.domain);
+			return;
+		}
+		
+		INameserver next=this.zones.get(splitStr[1]);
+		
+		if(next==null){
+			this.logToShell("No zone matching '" + splitStr[1] + "' found.");
+			throw new InvalidDomainException("No zone matching '" + splitStr[1] + "' found. Therefore " + domain + " cannot be registered on " + this.domain + "." );
+		}
+		
+		this.logToShell("Came across " + this.domain + " going deeper to find " + splitStr[0]);
+		next.registerNameserver(splitStr[0], nameserver, nameserverForChatserver);
+	}
+	
 	/* private methods */
 
-	private void teardown(){
+	private void teardown(int exitCode){
 		/* close streams */
 		this.shell.close();
-		System.exit(1);
+		System.exit(exitCode);
 
 	}
 	
@@ -261,6 +391,10 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		} catch (IOException e) {
 			
 		};
+	}
+	
+	private void logToShell(String msg){
+		printToShell(String.format("[[ %tc ]]: %s", new Date(), msg));
 	}
 	
 	private String[] stripToResolve(String str){
@@ -282,108 +416,5 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		ret[1] = str.substring(sep+1);
 		
 		return ret;
-	}
-
-	@Override
-	public void registerUser(String username, String address)
-			throws RemoteException, AlreadyRegisteredException, InvalidDomainException {
-		// TODO Auto-generated method stub
-		
-	}
-
-	@Override
-	public INameserverForChatserver getNameserver(String zone) throws RemoteException {
-		String[] splitStr = this.stripToResolve(zone);
-		INameserver ret = null;
-		
-		if(splitStr == null){
-			this.printToShell("[[ Bad Arguments for lookup passed. ]]");
-			return null;
-		}
-		
-		if(splitStr.length==1){
-			ret = this.zones.get(splitStr[0]);
-			
-			if(ret == null){
-				this.printToShell("[[ No user matching '" + zone + "' found. ]]");
-			}
-			
-			return ret;
-		}
-		
-		INameserver next=this.zones.get(splitStr[1]);
-		
-		if(next==null){
-			this.printToShell("[[ No zone matching '" + splitStr[1] + "' found. ]]");
-			return null;
-		}
-		
-		this.printToShell("[[ Came across " + this.domain + " going deeper to find " + splitStr[0] + "]]");
-		return next.getNameserver(splitStr[0]);
-	}
-
-	@Override
-	public String lookup(String username) throws RemoteException {
-		String[] splitStr = this.stripToResolve(username);
-		String ret = null;
-		
-		if(splitStr == null){
-			this.printToShell("[[ Bad Arguments for lookup passed. ]]");
-			return null;
-		}
-		
-		if(splitStr.length==1){
-			ret = this.users.get(splitStr[0]);
-			
-			if(ret == null){
-				this.printToShell("[[ No user matching '" + username + "' found. ]]");
-			}
-			
-			return ret;
-		}
-		
-		INameserver next=this.zones.get(splitStr[1]);
-		
-		if(next==null){
-			this.printToShell("[[ No zone matching '" + splitStr[1] + "' found. ]]");
-			return null;
-		}
-		
-		this.printToShell("[[ Came across " + this.domain + " going deeper to find " + splitStr[0] + "]]");
-		return next.lookup(splitStr[0]);
-		
-	}
-
-	@Override
-	public void registerNameserver(String domain, INameserver nameserver,
-			INameserverForChatserver nameserverForChatserver)
-					throws RemoteException, AlreadyRegisteredException, InvalidDomainException {
-		
-		String[] splitStr = this.stripToResolve(domain);
-		
-		if(splitStr == null || nameserver == null || nameserverForChatserver == null){
-			this.printToShell("[[ Bad Arguments for registering nameserver passed. ]]");
-			return;
-		}
-		
-		if(splitStr.length==1){			
-			if(this.zones.get(splitStr[0]) != null){
-				throw new AlreadyRegisteredException("[[ Already registered a nameserver known as '" + splitStr[0] + "' . Therefore " + domain + " cannot be registered on " + this.domain + ".");
-			}
-			
-			this.zones.put(splitStr[0], nameserver);
-			this.printToShell("[[ Successfully registered " + splitStr[0] + " to domain " + this.domain + "]]");
-			return;
-		}
-		
-		INameserver next=this.zones.get(splitStr[1]);
-		
-		if(next==null){
-			this.printToShell("[[ No zone matching '" + splitStr[1] + "' found. ]]");
-			throw new InvalidDomainException("No zone matching '" + splitStr[1] + "' found. Therefore " + domain + " cannot be registered on " + this.domain + "." );
-		}
-		
-		this.printToShell("[[ Came across " + this.domain + " going deeper to find " + splitStr[0] + "]]");
-		next.registerNameserver(splitStr[0], nameserver, nameserverForChatserver);
 	}
 }
