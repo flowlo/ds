@@ -142,7 +142,6 @@ public class Client implements IClientCli, Runnable {
 	public String logout() throws IOException {
 		oos.writeObject(new LogoutDTO());
 		oos.flush();
-
 		return null;
 	}
 
@@ -152,7 +151,6 @@ public class Client implements IClientCli, Runnable {
 		this.lastPublicMessage = message;
 		oos.writeObject(new SendDTO(message));
 		oos.flush();
-
 		return null;
 	}
 
@@ -160,7 +158,7 @@ public class Client implements IClientCli, Runnable {
 	@Command
 	public String list() throws IOException {
 		this.udpThread = new Thread(new UDPThread(this));
-		this.udpThread.run();
+		this.udpThread.start();
 		return null;
 	}
 
@@ -205,7 +203,6 @@ public class Client implements IClientCli, Runnable {
 	public String lookup(String username) throws IOException {
 		oos.writeObject(new LookupDTO(username));
 		oos.flush();
-
 		return null;
 	}
 
@@ -223,7 +220,7 @@ public class Client implements IClientCli, Runnable {
 			return "Invalid address.";
 		}
 
-		if (uri.getPath() != "") {
+		if (!uri.getPath().equals("")) {
 			return "Invalid address.";
 		}
 
@@ -240,12 +237,12 @@ public class Client implements IClientCli, Runnable {
 
 		server = new PrivateServer(addr, uri.getPort(), shell);
 		serverThread = new Thread(server);
-		serverThread.run();
+		serverThread.start();
 
 		oos.writeObject(new RegisterDTO(privateAddress));
 		oos.flush();
 
-		return "[[ Registered! ]]";
+		return "Registered.";
 	}
 
 	@Override
@@ -430,7 +427,7 @@ public class Client implements IClientCli, Runnable {
 		ois = new ObjectInputStream(new CipherInputStream(is, decryptionCipher));
 
 		this.listenThread = new Thread(new Listener());
-		this.listenThread.run();
+		this.listenThread.start();
 
 		return null;
 	}
@@ -466,7 +463,7 @@ public class Client implements IClientCli, Runnable {
 				client.shell.writeLine(response);
 
 			} catch (IOException e) {
-
+				e.printStackTrace();
 			}
 		}
 	}
@@ -506,7 +503,6 @@ public class Client implements IClientCli, Runnable {
 						shell.writeLine(((ErrorResponseDTO) o).getMessage());
 					}
 				}
-
 				ois.close();
 			} catch (IOException | ClassNotFoundException e) {
 				e.printStackTrace();
@@ -532,5 +528,4 @@ public class Client implements IClientCli, Runnable {
 			e.printStackTrace();
 		}
 	}
-
 }
