@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -40,12 +41,12 @@ import dto.LoggedOutDTO;
 import dto.LogoutDTO;
 import dto.LookedUpDTO;
 import dto.LookupDTO;
-import dto.MsgDTO;
 import dto.RegisterDTO;
 import dto.RegisteredDTO;
 import dto.SendDTO;
 import dto.SentDTO;
 import util.Config;
+import util.HmacUtil;
 import util.Keys;
 import util.SecurityUtils;
 
@@ -78,6 +79,8 @@ public class Client implements IClientCli, Runnable {
 	private ObjectOutputStream oos = null;
 	private ObjectInputStream ois = null;
 
+	private HmacUtil hmac;
+
 	/**
 	 * @param componentName
 	 *            the name of the component - represented in the prompt
@@ -100,6 +103,8 @@ public class Client implements IClientCli, Runnable {
 		this.shell.register(this);
 
 		this.myContacts = new ConcurrentHashMap<String, String>();
+
+		this.hmac = new HmacUtil(config.getString("hmac.key"));
 	}
 
 	@Override
@@ -166,34 +171,37 @@ public class Client implements IClientCli, Runnable {
 		String address = this.myContacts.get(username);
 
 		if (address == null) {
-			return "[[ Not able to send message to " + username + " ]]";
+			return "Address for user \"" + username + "\" unknown. Maybe lookup first?";
 		}
-
-		Socket socket = null;
 
 		String hostname = address.split(":")[0];
 		String port = address.split(":")[1];
 
-		try {
-			socket = new Socket(hostname, Integer.parseInt(port));
-		} catch (UnknownHostException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
+		Socket socket = new Socket(hostname, Integer.parseInt(port));
+
+		OutputStream os = socket.getOutputStream();
+		message = hmac.prependHash("!msg " + message);
+		os.write(message.getBytes());
+		os.flush();
+
+		InputStream is = socket.getInputStream();
+		byte[] buf = new byte[1024];
+		int len = is.read(buf);
+		message = new String(buf, 0, len);
+		String hash = message.substring(0, 44);
+		String payload = message.substring(45);
+
+		if (!hmac.checkHash(payload, hash)) {
+			shell.writeLine("Incoming message from " + username + " was tampered.");
+		} else  if (payload.equals("!ack")) {
+			shell.writeLine(username + " replied with !ack.");
+		} else {
+			shell.writeLine(username + " signalled tampering of our message!");
 		}
 
-		ObjectOutputStream output = null;
+		socket.close();
 
-		try {
-			output = new ObjectOutputStream(socket.getOutputStream());
-		} catch (IOException e1) {
-			e1.printStackTrace();
-		}
-
-		output.writeObject(new MsgDTO(username, message));
-		output.flush();
-
-		return "[[ Successfully sent.]]";
+		return null;
 	}
 
 	@Override
@@ -233,7 +241,7 @@ public class Client implements IClientCli, Runnable {
 			return "Unkown host.";
 		}
 
-		server = new PrivateServer(addr, uri.getPort(), shell);
+		server = new PrivateServer(addr, uri.getPort(), shell, hmac);
 		serverThread = new Thread(server);
 		serverThread.start();
 
