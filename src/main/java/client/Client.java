@@ -22,6 +22,7 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -81,6 +82,8 @@ public class Client implements IClientCli, Runnable {
 
 	private HmacUtil hmac;
 
+	private final Buffer buffer = new Buffer(5, TimeUnit.SECONDS);
+
 	/**
 	 * @param componentName
 	 *            the name of the component - represented in the prompt
@@ -135,10 +138,26 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String logout() throws IOException {
-		if(oos!=null){
+		if (oos != null) {
 			oos.writeObject(new LogoutDTO());
 			oos.flush();
 		}
+
+		LoggedOutDTO dto = null;
+
+		try {
+			dto = (LoggedOutDTO) buffer.take();
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+		if (dto != null) {
+			oos.close();
+			ois.close();
+			return dto.getMessage();
+		}
+
 		return null;
 	}
 
@@ -162,6 +181,10 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String msg(String username, String message) throws IOException {
+		if (!myContacts.containsKey(username) && !performLookup(username)) {
+			return "Failed to look up \"" + username + "\".";
+		}
+
 		String address = this.myContacts.get(username);
 
 		if (address == null) {
@@ -179,34 +202,57 @@ public class Client implements IClientCli, Runnable {
 		os.write(message.getBytes());
 		os.flush();
 
-
 		byte[] buf = new byte[1024];
 		int len = is.read(buf);
 		message = new String(buf, 0, len);
 		String hash = message.substring(0, 44);
 		String payload = message.substring(45);
 
+		String result = null;
 		if (!hmac.checkHash(payload, hash)) {
-			shell.writeLine("Incoming message from " + username + " was tampered.");
-		} else  if (payload.equals("!ack")) {
-			shell.writeLine(username + " replied with !ack.");
+			result = "Incoming message from " + username + " was tampered.";
+		} else if (payload.equals("!ack")) {
+			result = username + " replied with !ack.";
 		} else {
-			shell.writeLine(username + " signalled tampering of our message!");
+			result = username + " signalled tampering of our message!";
 		}
 
 		os.close();
 		is.close();
 		socket.close();
 
-		return null;
+		return result;
 	}
 
 	@Override
 	@Command
 	public String lookup(String username) throws IOException {
+		if (performLookup(username)) {
+			return myContacts.get(username);
+		}
+		return "Failed to look up \"" + username + "\".";
+	}
+
+	private boolean performLookup(String username) throws IOException {
 		oos.writeObject(new LookupDTO(username));
 		oos.flush();
-		return null;
+
+		LookedUpDTO dto = null;
+
+		try {
+			dto = (LookedUpDTO) buffer.take();
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			return false;
+		}
+
+		if (dto == null || dto.getMessage() == null) {
+			return false;
+		}
+
+		myContacts.put(username, dto.getMessage());
+		return true;
 	}
 
 	@Override
@@ -245,7 +291,21 @@ public class Client implements IClientCli, Runnable {
 		oos.writeObject(new RegisterDTO(privateAddress));
 		oos.flush();
 
-		return "Registered.";
+		RegisteredDTO dto = null;
+
+		try {
+			dto = (RegisteredDTO) buffer.take();
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+			return e.toString();
+		}
+
+		if (dto == null) {
+			return "Failed to register.";
+		}
+
+		return dto.getMessage();
 	}
 
 	@Override
@@ -257,23 +317,22 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String exit() throws IOException {
-
 		if (this.oos != null) {
-			//this.logout();
+			// this.logout();
 			this.oos.close();
 		}
 
 		/* shutdown thread pools */
-		if(this.serverThread!=null){
+		if (this.serverThread != null) {
 			this.serverThread.interrupt();
 		}
-		if(this.udpThread!=null){
+		if (this.udpThread != null) {
 			this.udpThread.interrupt();
 		}
-		
+
 		/* close sockets */
-		if(this.socket!=null){
-			if(!this.socket.isClosed()){
+		if (this.socket != null) {
+			if (!this.socket.isClosed()) {
 				this.socket.close();
 			}
 		}
@@ -294,7 +353,7 @@ public class Client implements IClientCli, Runnable {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-		
+
 		File privateKeyFile = new File(config.getString("keys.dir"), username + ".pem");
 		if (!privateKeyFile.exists()) {
 			shell.writeLine("Could not find private key file for username \"" + username + "\".");
@@ -444,7 +503,7 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		ois = new ObjectInputStream(new CipherInputStream(is, decryptionCipher));
-        shell.writeLine("Successfully established secure connection with server!");
+		shell.writeLine("Successfully established secure connection with server!");
 
 		this.listenThread = new Thread(new Listener());
 		this.listenThread.start();
@@ -501,39 +560,24 @@ public class Client implements IClientCli, Runnable {
 						break;
 					}
 
-					if (o instanceof LoggedOutDTO) {
-						shell.writeLine(((LoggedOutDTO) o).getMessage());
-						ois.close();
-						oos.close();
-						break;
-					} else if (o instanceof LookedUpDTO) {
-						String new_address = ((LookedUpDTO) o).getMessage();
-						String username = ((LookedUpDTO) o).getRequest().getUsername();
-
-						if (myContacts.containsKey(username)) {
-							myContacts.remove(username);
-						}
-
-						myContacts.put(username, new_address);
-						shell.writeLine(new_address);
-					} else if (o instanceof RegisteredDTO) {
-						shell.writeLine(((RegisteredDTO) o).getMessage());
-					} else if (o instanceof SentDTO) {
+					if (o instanceof SentDTO) {
 						lastPublicMessage = ((SentDTO) o).getMessage();
 						shell.writeLine(((SentDTO) o).getMessage());
 					} else if (o instanceof ErrorResponseDTO) {
 						shell.writeLine(((ErrorResponseDTO) o).getMessage());
+					} else {
+						buffer.put(o);
 					}
 				}
 				ois.close();
-			} catch (IOException | ClassNotFoundException e) {
-				if(ois!=null){
+			} catch (IOException | ClassNotFoundException | InterruptedException e) {
+				if (ois != null) {
 					try {
 						ois.close();
 					} catch (IOException e1) {
 					}
 				}
-			} finally{
+			} finally {
 				ois = null;
 				oos = null;
 			}
