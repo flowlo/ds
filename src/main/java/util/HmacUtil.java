@@ -46,7 +46,7 @@ public class HmacUtil {
 	 * @return
 	 */
 	public String generateHash(String message) {
-		return (Base64.encode(generateHashAsByteArray(message))).toString();
+		return new String(Base64.encode(generateHashAsByteArray(message)));
 	}
 
 	/**
