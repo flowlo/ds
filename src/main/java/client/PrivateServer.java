@@ -75,7 +75,6 @@ public class PrivateServer implements Runnable {
 		public void run() {
 			try {
 				int len = is.read(buf);
-				is.close();
 
 				String message = new String(buf, 0, len);
 				String hash = message.substring(0, 44);
@@ -95,7 +94,8 @@ public class PrivateServer implements Runnable {
 
 					os.write(message.getBytes());
 					os.flush();
-				}				
+				}
+				is.close();
 				os.close();
 			} catch(IOException e) {
 				e.printStackTrace();

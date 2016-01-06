@@ -114,7 +114,6 @@ public class Chatserver implements IChatserverCli, Runnable {
 			this.serverSocket = new ServerSocket(tcpPort);
 		} catch (IOException e) {
 			System.err.println("Error creating TCP ServerSocket on port: " + tcpPort);
-			e.printStackTrace();
 			try {
 				exit();
 			} catch (IOException ex) {
@@ -126,7 +125,6 @@ public class Chatserver implements IChatserverCli, Runnable {
 			this.datagramSocket = new DatagramSocket(udpPort);
 		} catch (IOException e) {
 			System.err.println("Error creating UDP DatagramSocket on port: " + udpPort);
-			e.printStackTrace();
 			try {
 				exit();
 			} catch (IOException ex) {
@@ -160,9 +158,9 @@ public class Chatserver implements IChatserverCli, Runnable {
 				};
 				threadPool.execute(handler);
 			} catch (IOException e) {
-				e.printStackTrace();
+				System.out.println("TCP Socket closed");
 				break;
-			}
+			} 
 		}
 	}
 
@@ -398,8 +396,12 @@ public class Chatserver implements IChatserverCli, Runnable {
 					buffer = message.getBytes();
 					packet = new DatagramPacket(buffer, buffer.length, address, port);
 					datagramSocket.send(packet);
-				} catch (IOException e) {
-					e.printStackTrace();
+				}catch(SocketException se){
+					if(datagramSocket!=null){
+						datagramSocket.close();
+						System.out.println("UDP Socket closed!");
+					}
+				}catch (IOException e) {
 				}
 			}
 		}

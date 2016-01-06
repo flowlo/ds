@@ -121,14 +121,6 @@ public class Client implements IClientCli, Runnable {
 		this.udp_port = config.getInt("chatserver.udp.port");
 
 		try {
-			this.socket = new Socket(this.hostname, this.tcp_port);
-		} catch (UnknownHostException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-
-		try {
 			this.datagramSocket = new DatagramSocket();
 		} catch (SocketException e) {
 			e.printStackTrace();
@@ -143,8 +135,10 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String logout() throws IOException {
-		oos.writeObject(new LogoutDTO());
-		oos.flush();
+		if(oos!=null){
+			oos.writeObject(new LogoutDTO());
+			oos.flush();
+		}
 		return null;
 	}
 
@@ -180,11 +174,12 @@ public class Client implements IClientCli, Runnable {
 		Socket socket = new Socket(hostname, Integer.parseInt(port));
 
 		OutputStream os = socket.getOutputStream();
+		InputStream is = socket.getInputStream();
 		message = hmac.prependHash("!msg " + message);
 		os.write(message.getBytes());
 		os.flush();
 
-		InputStream is = socket.getInputStream();
+
 		byte[] buf = new byte[1024];
 		int len = is.read(buf);
 		message = new String(buf, 0, len);
@@ -199,6 +194,8 @@ public class Client implements IClientCli, Runnable {
 			shell.writeLine(username + " signalled tampering of our message!");
 		}
 
+		os.close();
+		is.close();
 		socket.close();
 
 		return null;
@@ -260,19 +257,27 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String exit() throws IOException {
-		this.logout();
 
 		if (this.oos != null) {
+			//this.logout();
 			this.oos.close();
 		}
 
-		/* close sockets */
-		this.socket.close();
-		this.datagramSocket.close();
-
 		/* shutdown thread pools */
-		this.serverThread.interrupt();
-		this.udpThread.interrupt();
+		if(this.serverThread!=null){
+			this.serverThread.interrupt();
+		}
+		if(this.udpThread!=null){
+			this.udpThread.interrupt();
+		}
+		
+		/* close sockets */
+		if(this.socket!=null){
+			if(!this.socket.isClosed()){
+				this.socket.close();
+			}
+		}
+		this.datagramSocket.close();
 
 		Thread.currentThread().interrupt();
 
@@ -282,6 +287,14 @@ public class Client implements IClientCli, Runnable {
 	@Command
 	@Override
 	public String authenticate(String username) throws IOException {
+		try {
+			this.socket = new Socket(this.hostname, this.tcp_port);
+		} catch (UnknownHostException e) {
+			e.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		
 		File privateKeyFile = new File(config.getString("keys.dir"), username + ".pem");
 		if (!privateKeyFile.exists()) {
 			shell.writeLine("Could not find private key file for username \"" + username + "\".");
@@ -431,6 +444,7 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		ois = new ObjectInputStream(new CipherInputStream(is, decryptionCipher));
+        shell.writeLine("Successfully established secure connection with server!");
 
 		this.listenThread = new Thread(new Listener());
 		this.listenThread.start();
@@ -483,13 +497,15 @@ public class Client implements IClientCli, Runnable {
 					try {
 						o = ois.readObject();
 					} catch (SocketException e) {
-						e.printStackTrace();
 						ois.close();
 						break;
 					}
 
 					if (o instanceof LoggedOutDTO) {
 						shell.writeLine(((LoggedOutDTO) o).getMessage());
+						ois.close();
+						oos.close();
+						break;
 					} else if (o instanceof LookedUpDTO) {
 						String new_address = ((LookedUpDTO) o).getMessage();
 						String username = ((LookedUpDTO) o).getRequest().getUsername();
@@ -511,7 +527,15 @@ public class Client implements IClientCli, Runnable {
 				}
 				ois.close();
 			} catch (IOException | ClassNotFoundException e) {
-				e.printStackTrace();
+				if(ois!=null){
+					try {
+						ois.close();
+					} catch (IOException e1) {
+					}
+				}
+			} finally{
+				ois = null;
+				oos = null;
 			}
 		}
 	}

@@ -1,5 +1,6 @@
 package chatserver;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
@@ -20,8 +21,8 @@ import nameserver.exceptions.InvalidDomainException;
 public class Session implements Runnable {
 	private final Chatserver server;
 	private final User user;
-	private final ObjectInputStream ois;
-	private final ObjectOutputStream oos;
+	private ObjectInputStream ois;
+	private ObjectOutputStream oos;
 	private final INameserverForChatserver rootNameserver;
 
 	public Session(Chatserver server, User user, ObjectInputStream ois, ObjectOutputStream oos, INameserverForChatserver rootNameserver) {
@@ -81,13 +82,15 @@ public class Session implements Runnable {
 	}
 
 	public String processLogout(LogoutDTO dto) throws IOException {
-		this.oos.close();
-		this.ois.close();
 		return "Successfully logged out.";
 	}
 
 	public void writeObject(Object o) throws IOException {
 		oos.writeObject(o);
+	}
+	
+	private void removeSession(){
+		this.user.getSessions().remove(this); //Remove the instance form session set
 	}
 
 	@Override
@@ -106,12 +109,21 @@ public class Session implements Runnable {
 					writeObject(new LookedUpDTO((LookupDTO) o, this.processLookup((LookupDTO) o)));
 				} else if (o instanceof LogoutDTO) {
 					writeObject(new LoggedOutDTO((LogoutDTO) o, this.processLogout((LogoutDTO) o)));
+					this.oos.close();
+					this.ois.close();
+					break;
 				}
 				oos.flush();
 			}
-		} catch (IOException | ClassNotFoundException e) {
+		} catch(EOFException eof){
+			System.out.printf("User:[%s] closed connection!\n",user.getName());
+		}catch (IOException | ClassNotFoundException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
+		}finally{
+			this.oos = null;
+			this.ois = null;
+			removeSession();
 		}
 	}
 }
