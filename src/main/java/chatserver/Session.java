@@ -61,14 +61,14 @@ public class Session {
 	}
 
 	public AddressDTO lookup(LookupDTO dto) {
-		String parts[] = dto.getUsername().split(".");
+		String[] parts = dto.getUsername().split("\\.");
 		INameserverForChatserver callback = server.getRootNameserver();
 
 		try {
 			for (int i = (parts.length - 1) ; i > 0 ; i--) {
 				callback = callback.getNameserver(parts[i]);
 			}
-			return new AddressDTO(callback.lookup(dto.getUsername()));
+			return new AddressDTO(callback.lookup(parts[0]));
 		} catch (RemoteException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
