@@ -28,9 +28,6 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 
 	/* fields for Config & args for shell */
 	private final Config config;
-	private final String componentName;
-	private final InputStream userRequestStream;
-	private final PrintStream userResponseStream;
 
 	private final Shell shell;
 
@@ -60,12 +57,9 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 
 		/* setup config and args for shell */
 		this.config = config;
-		this.componentName = componentName;
-		this.userRequestStream = userRequestStream;
-		this.userResponseStream = userResponseStream;
 
 		/* register shell */
-		this.shell = new Shell(this.componentName, this.userRequestStream, this.userResponseStream);
+		this.shell = new Shell(componentName, userRequestStream, userResponseStream);
 		this.shell.register(this);
 	}
 
@@ -74,92 +68,89 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		/* start shell */
 		(new Thread(this.shell)).start();
 
+		boolean isRoot = false;
+
 		/* read domain */
 		this.domain = null;
 		try {
 			this.domain = this.config.getString("domain");
 			logToShell("Nameserver for " + domain + " has been started.");
 		} catch (java.util.MissingResourceException ex) {
+			isRoot = true;
 			logToShell("Root-nameserver has been started.");
 		}
 
-		/* nameserver is root-nameserver */
-		if (this.domain == null) {
-			String bindingName = config.getString("root_id");
-
+		if (isRoot) {
 			this.domain = "root-domain";
+
+			String bindingName = config.getString("root_id");
 
 			/* Initialize Registry. */
 			try {
 				this.registry = LocateRegistry.createRegistry(config.getInt("registry.port"));
 			} catch (RemoteException e) {
-				this.logToShell("Creating Registry failed.");
+				this.teardown("Creating Registry failed." + e.toString());
 			}
-
 			/* create remoteobject */
 			INameserver remoteObject = null;
 			try {
 				remoteObject = (INameserver) UnicastRemoteObject.exportObject((Remote) this, 0);
-			} catch (RemoteException e1) {
-				this.logToShell("Creating remote object failed.");
+			} catch (RemoteException e) {
+				this.teardown("Creating remote object failed." + e.toString());
 			}
 
 			/* binding remoteObject to registry */
 			try {
 				registry.bind(bindingName, remoteObject);
-			} catch (AccessException e) {
-				this.logToShell("Binding to registry failed: AccessException");
-			} catch (RemoteException e) {
-				this.logToShell("Binding to registry failed: RemoteException");
-			} catch (AlreadyBoundException e) {
-				this.logToShell("Binding to registry failed: AlreadyBoundException");
+			} catch (RemoteException | AlreadyBoundException e) {
+				this.teardown("failed binding remoteObject to registry:" + e.toString());
 			}
 
 			this.logToShell("Bound to " + bindingName + ".");
-
-			/* nameserver is lower level */
-		} else {
+		}
+		/* nameserver is lower level */
+		else {
 			String regHost = this.config.getString("registry.host");
 			int regPort = this.config.getInt("registry.port");
 
+			/* obtain registry object */
 			try {
 				this.registry = LocateRegistry.getRegistry(regHost, regPort);
 			} catch (RemoteException e) {
-				this.logToShell("Locating Registry failed.");
+				this.teardown("Locating Registry failed.\n" + e.toString());
 			}
 
 			String lookupName = this.config.getString("root_id");
 			INameserver rootServer = null;
+
+			/* obtain server object */
+
 			try {
 				rootServer = (INameserver) this.registry.lookup(lookupName);
-			} catch (AccessException e) {
-				this.logToShell("Looking up from registry failed: AccessException" + e.getMessage());
-			} catch (RemoteException e) {
-				this.logToShell("Looking up from registry failed: RemoteException" + e.getMessage());
-			} catch (NotBoundException e) {
-				this.logToShell("Looking up from registry failed: NotBoundException" + e.getMessage());
+			} catch (RemoteException | NotBoundException e) {
+				this.teardown("Obtaining rootServer object failed: " + e.toString());
 			}
 
 			/* create remoteobject */
 			INameserver remoteObject = null;
 			try {
 				remoteObject = (INameserver) UnicastRemoteObject.exportObject((Remote) this, 0);
-			} catch (RemoteException e1) {
-				this.logToShell("Creating remote object failed.");
+			} catch (RemoteException e) {
+				this.logToShell("Creating remote object failed: " + e.toString());
 			}
 
-			try {
-				rootServer.registerNameserver(this.domain, remoteObject, remoteObject);
-			} catch (RemoteException e) {
-				this.logToShell("Registering Nameserver failed:\n\tRemoteException: " + e.getMessage());
-				this.teardown(1);
-			} catch (AlreadyRegisteredException e) {
-				this.logToShell("Registering Nameserver failed:\n\tAlreadyRegisteredException: " + e.getMessage());
-				this.teardown(2);
-			} catch (InvalidDomainException e) {
-				this.logToShell("Registering Nameserver failed:\n\tInavlidDomainException: " + e.getMessage());
-				this.teardown(3);
+			/* register nameserver */
+			boolean retry = true;
+			while (retry) {
+				try {
+					rootServer.registerNameserver(this.domain, remoteObject, remoteObject);
+					retry = false;
+				} catch (RemoteException | AlreadyRegisteredException | InvalidDomainException e) {
+					this.logToShell("Registering Nameserver failed: " + e.toString() + "\n Retrying.");
+				}
 			}
+
+			this.logToShell("Successfully registered.");
 		}
 	}
 
@@ -217,7 +208,7 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 	@Override
 	@Command
 	public String exit() throws IOException {
-		this.teardown(0);
+		this.teardown();
 
 		return "System is going down for shutdown now.";
 	}
@@ -368,10 +359,19 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 
 	/* private methods */
 
-	private void teardown(int exitCode) {
+	public void teardown() {
+		this.teardown(null);
+
+	}
+
+	public void teardown(String msg) {
+		if (msg != null) {
+			this.logToShell(msg);
+		}
+
+		this.logToShell("Nameserver is going down for shutdown NOW!");
 		/* close streams */
 		this.shell.close();
-		System.exit(exitCode);
 
 	}
 
