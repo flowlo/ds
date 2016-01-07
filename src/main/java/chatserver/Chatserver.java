@@ -29,16 +29,15 @@ import util.Keys;
 import util.SecurityUtils;
 
 public class Chatserver implements IChatserverCli, Runnable {
-	private static Thread mainThread;
-
-	private Config config;
-
-	private Shell shell;
-
+	private final Shell shell;
+	private final int tcpPort;
+	private final int udpPort;
+	private final int regPort;
+	private final String regHost;
+	private final String rootID;
+	private final File keyDir;
+	private final File keyFile;
 	private final Set<User> users = Collections.synchronizedSet(new HashSet<User>());
-
-	private int tcpPort;
-	private int udpPort;
 
 	private ServerSocket serverSocket;
 	private DatagramSocket datagramSocket;
@@ -63,14 +62,20 @@ public class Chatserver implements IChatserverCli, Runnable {
 	 */
 	public Chatserver(String componentName, Config config, InputStream userRequestStream,
 			PrintStream userResponseStream) {
-		this.config = config;
+		tcpPort = config.getInt("tcp.port");
+		udpPort = config.getInt("udp.port");
+		regHost = config.getString("registry.host");
+		regPort = config.getInt("registry.port");
+		rootID = config.getString("root_id");
+		keyDir = new File(config.getString("keys.dir"));
+		keyFile = new File(config.getString("key"));
 
-		this.shell = new Shell(componentName, userRequestStream, userResponseStream);
-		this.shell.register(this);
+		shell = new Shell(componentName, userRequestStream, userResponseStream);
+		shell.register(this);
 	}
 
 	public Set<User> getUsers() {
-		return this.users;
+		return users;
 	}
 
 	public INameserverForChatserver getRootNameserver() {
@@ -78,10 +83,6 @@ public class Chatserver implements IChatserverCli, Runnable {
 	}
 
 	private void initRootNameserver() {
-		// Locate Registry
-		String regHost = config.getString("registry.host");
-		int regPort = config.getInt("registry.port");
-
 		Registry registry = null;
 		try {
 			registry = LocateRegistry.getRegistry(regHost, regPort);
@@ -89,37 +90,29 @@ public class Chatserver implements IChatserverCli, Runnable {
 			e.printStackTrace();
 		}
 
-		String lookupName = config.getString("root_id");
-
 		try {
-			rootNameserver = (INameserver) registry.lookup(lookupName);
-		} catch (AccessException e) {
-			e.printStackTrace();
-		} catch (RemoteException e) {
-			e.printStackTrace();
-		} catch (NotBoundException e) {
+			rootNameserver = (INameserver) registry.lookup(rootID);
+		} catch (RemoteException | NotBoundException e) {
 			e.printStackTrace();
 		}
 	}
 
 	private void initKeys() {
-		final File privateKeyFile = new File(config.getString("key"));
-
 		try {
-			this.privateKey = Keys.readPrivatePEM(privateKeyFile);
+			privateKey = Keys.readPrivatePEM(keyFile);
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 
-		File[] keys = new File(config.getString("keys.dir")).listFiles(new FileFilter() {
+		File[] keys = keyDir.listFiles(new FileFilter() {
 			@Override
 			public boolean accept(File pathname) {
 				// The server will find it's own public key. To avoid that,
 				// derive the name of the public key from the name of the
 				// private key.
 				// This purely relies on convention.
-				if (pathname.equals(new File(privateKeyFile.getPath().replaceFirst("\\.pem$", ".pub.pem")))) {
+				if (pathname.equals(new File(keyFile.getPath().replaceFirst("\\.pem$", ".pub.pem")))) {
 					return false;
 				}
 				if (!pathname.getName().endsWith(".pub.pem")) {
@@ -140,9 +133,6 @@ public class Chatserver implements IChatserverCli, Runnable {
 
 		initRootNameserver();
 		initKeys();
-
-		this.tcpPort = config.getInt("tcp.port");
-		this.udpPort = config.getInt("udp.port");
 
 		try {
 			this.serverSocket = new ServerSocket(tcpPort);
@@ -169,29 +159,45 @@ public class Chatserver implements IChatserverCli, Runnable {
 		udpThread = new Thread(new UDPThread());
 		udpThread.start();
 
-		while (!Thread.currentThread().isInterrupted()) {
+		while (true) {
 			try {
 				final Socket socket = serverSocket.accept();
 				Thread handler = new Thread() {
 					@Override
 					public void run() {
-						Session session = null;
+						setName("handle-" + socket.toString());
 
-						do {
+						try {
+							Session session = null;
+
 							try {
-								shell.writeLine("Shaking hands with " + socket.toString() + " ...");
 								session = shakeHands(socket);
-							} catch (IOException e) {
-								e.printStackTrace();
-								return;
+							} catch (IOException ignored) {
+								// Somebody bothered us with a failed attempt to
+								// shake hands. Maybe block the source if this
+								// happens too often.
+								shell.writeLine("Shaking hands with " + socket.toString() + " failed.");
 							}
-						} while (session == null || session.talk());
+
+							if (session == null) {
+								try {
+									socket.close();
+								} catch (IOException ignored) {
+								}
+							}
+
+							session.talk();
+						} catch (IOException e) {
+							throw new RuntimeException();
+						}
 					}
 				};
+
 				threadPool.execute(handler);
 			} catch (IOException e) {
-				System.out.println("TCP Socket closed");
-				break;
+				// Return if the serverSocket raised an IOE on accept(),
+				// which is also the case when it's closed.
+				return;
 			}
 		}
 	}
@@ -277,9 +283,9 @@ public class Chatserver implements IChatserverCli, Runnable {
 
 		message = ("!ok " + params[2] + " " + // Here we return the client
 												// challenge.
-				challenge + " " + new String(Base64.encode(secret)) + " " + new String(Base64.encode(iv))).getBytes();
+		challenge + " " + new String(Base64.encode(secret)) + " " + new String(Base64.encode(iv))).getBytes();
 
-		PublicKey publicKey = Keys.readPublicPEM(new File(config.getString("keys.dir"), username + ".pub.pem"));
+		PublicKey publicKey = Keys.readPublicPEM(new File(keyDir, username + ".pub.pem"));
 
 		// Use user's public key to encrypt.
 		try {
@@ -359,7 +365,6 @@ public class Chatserver implements IChatserverCli, Runnable {
 	}
 
 	private class UDPThread implements Runnable {
-
 		public void run() {
 			byte[] buffer;
 			String message;
@@ -369,7 +374,7 @@ public class Chatserver implements IChatserverCli, Runnable {
 				try {
 					DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
 					datagramSocket.receive(packet);
-					message = new String(packet.getData(), 0, packet.getLength()).trim();
+					message = new String(packet.getData(), packet.getOffset(), packet.getLength());
 
 					if (!message.equals("!list")) {
 						continue;
@@ -400,9 +405,9 @@ public class Chatserver implements IChatserverCli, Runnable {
 					packet = new DatagramPacket(buffer, buffer.length, address, port);
 					datagramSocket.send(packet);
 				} catch (SocketException se) {
+					se.printStackTrace();
 					if (datagramSocket != null) {
 						datagramSocket.close();
-						System.out.println("UDP Socket closed!");
 					}
 				} catch (IOException e) {
 				}
@@ -413,16 +418,40 @@ public class Chatserver implements IChatserverCli, Runnable {
 	@Override
 	@Command
 	public String exit() throws IOException {
-		System.out.println("Server is going down for shutdown now!");
+		// Close serverSocket so that we can't
+		// accept new connections and interrupt
+		// our listening thread which could be
+		// blocking on accept.
+		if (serverSocket != null) {
+			serverSocket.close();
+			serverSocket = null;
+		}
 
-		this.serverSocket.close();
-		this.datagramSocket.close();
+		// Attempt to shut down all sessions.
+		if (threadPool != null) {
+			threadPool.shutdownNow();
+			threadPool = null;
+		}
 
-		threadPool.shutdownNow();
+		// Close datagramSocket to interrupt udpThread if
+		// it is currently blocking on receive. This will
+		// likely raise an IOException (also upon further
+		// attempts to receive).
+		if (datagramSocket != null) {
+			datagramSocket.close();
+			datagramSocket = null;
+		}
 
-		udpThread.interrupt();
+		// If closing datagramSocket has not brought down
+		// udpThread by now, interrupt it.
+		if (udpThread != null && udpThread.isAlive()) {
+			udpThread.interrupt();
+			udpThread = null;
+		}
 
-		shell.close();
+		if (shell != null) {
+			shell.close();
+		}
 
 		return "Shutdown completed!";
 	}
@@ -436,15 +465,6 @@ public class Chatserver implements IChatserverCli, Runnable {
 		SecurityUtils.registerBouncyCastle();
 
 		Chatserver chatserver = new Chatserver(args[0], new Config("chatserver"), System.in, System.out);
-
-		mainThread = new Thread(chatserver);
-		mainThread.start();
-
-		try {
-			mainThread.join();
-		} catch (InterruptedException e) {
-			System.out.println("Server root thread is going to die now.");
-			Thread.currentThread().interrupt();
-		}
+		chatserver.run();
 	}
 }

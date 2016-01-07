@@ -377,6 +377,11 @@ public class Client implements IClientCli, Runnable {
 	@Command
 	public String exit() throws IOException {
 		teardown();
+
+		if (shell != null) {
+			shell.close();
+		}
+
 		return "Bye!";
 	}
 

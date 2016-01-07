@@ -46,7 +46,7 @@ public class Session {
 
 		try {
 			server.getRootNameserver().registerUser(user.getName(), user.getAddress());
-		} catch (RemoteException|InvalidDomainException|AlreadyRegisteredException e) {
+		} catch (RemoteException | InvalidDomainException | AlreadyRegisteredException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 			return null;
@@ -69,35 +69,40 @@ public class Session {
 		oos.writeObject(o);
 	}
 
-	public boolean talk() {
+	public void talk() {
 		try {
 			Object o = null;
 
 			while (!Thread.currentThread().isInterrupted()) {
 				o = ois.readObject();
-				System.out.println("Received " + o.getClass().getName());
+
 				if (o instanceof MessageDTO) {
 					send((MessageDTO) o);
 				} else if (o instanceof AddressDTO) {
-					writeObject(register((AddressDTO)o));
+					writeObject(register((AddressDTO) o));
 				} else if (o instanceof LookupDTO) {
-					writeObject(lookup((LookupDTO)o));
+					writeObject(lookup((LookupDTO) o));
 				} else if (o instanceof LogoutDTO) {
 					writeObject(new LoggedOutDTO());
-					System.err.println("Returning from talk()");
-					return true;
+					break;
 				}
+
 				oos.flush();
 			}
-		} catch (EOFException eof) {
-			System.out.printf("User:[%s] closed connection!\n", user.getName());
+		} catch (EOFException ignored) {
 		} catch (IOException | ClassNotFoundException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} finally {
+			try {
+				oos.flush();
+				oos.close();
+				ois.close();
+			} catch (IOException ignored) {
+			}
+
 			user.removeSession(this);
 		}
-		return false;
 	}
 
 	@Override
@@ -142,5 +147,4 @@ public class Session {
 			return false;
 		return true;
 	}
-
 }
