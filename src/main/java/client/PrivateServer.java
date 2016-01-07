@@ -2,12 +2,10 @@ package client;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.ObjectInputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -81,7 +79,7 @@ public class PrivateServer implements Runnable {
 				if (!payload.startsWith("!msg ")) {
 					shell.writeLine("Received bogus message. Ignoring.");
 				} else {
-					message = payload.substring(4);
+					message = payload.substring(5);
 
 					if (hmac.checkHash(payload, hash)) {
 						shell.writeLine("Received message: " + message);
