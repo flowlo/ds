@@ -46,6 +46,7 @@ public class PrivateServer implements Runnable {
 			} catch (IOException e) {
 				try {
 					shell.writeLine("Thread listening for private server is going down.");
+					return;
 				} catch (IOException ignored) {}
 			}
 		}
