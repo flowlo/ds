@@ -35,7 +35,7 @@ public class Chatserver implements IChatserverCli, Runnable {
 
 	private Shell shell;
 
-	private final List<User> users = Collections.synchronizedList(new LinkedList<User>());
+	private final Set<User> users = Collections.synchronizedSet(new HashSet<User>());
 
 	private int tcpPort;
 	private int udpPort;
@@ -44,11 +44,12 @@ public class Chatserver implements IChatserverCli, Runnable {
 	private DatagramSocket datagramSocket;
 
 	private Thread udpThread;
-	private Registry registry;
 
 	private ExecutorService threadPool = Executors.newCachedThreadPool();
 
 	private PrivateKey privateKey;
+
+	private INameserverForChatserver rootNameserver;
 
 	/**
 	 * @param componentName
@@ -68,19 +69,40 @@ public class Chatserver implements IChatserverCli, Runnable {
 		this.shell.register(this);
 	}
 
-	public List<User> getUsers() {
+	public Set<User> getUsers() {
 		return this.users;
 	}
 
-	@Override
-	public void run() {
-		new Thread(this.shell).start();
+	public INameserverForChatserver getRootNameserver() {
+		return rootNameserver;
+	}
 
-		System.out.println(getClass().getName() + " up and waiting for commands!");
+	private void initRootNameserver() {
+		// Locate Registry
+		String regHost = config.getString("registry.host");
+		int regPort = config.getInt("registry.port");
 
-		this.tcpPort = config.getInt("tcp.port");
-		this.udpPort = config.getInt("udp.port");
+		Registry registry = null;
+		try {
+			registry = LocateRegistry.getRegistry(regHost, regPort);
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		}
 
+		String lookupName = config.getString("root_id");
+
+		try {
+			rootNameserver = (INameserver) registry.lookup(lookupName);
+		} catch (AccessException e) {
+			e.printStackTrace();
+		} catch (RemoteException e) {
+			e.printStackTrace();
+		} catch (NotBoundException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void initKeys() {
 		final File privateKeyFile = new File(config.getString("key"));
 
 		try {
@@ -94,7 +116,8 @@ public class Chatserver implements IChatserverCli, Runnable {
 			@Override
 			public boolean accept(File pathname) {
 				// The server will find it's own public key. To avoid that,
-				// derive the name of the public key from the name of the private key.
+				// derive the name of the public key from the name of the
+				// private key.
 				// This purely relies on convention.
 				if (pathname.equals(new File(privateKeyFile.getPath().replaceFirst("\\.pem$", ".pub.pem")))) {
 					return false;
@@ -109,6 +132,17 @@ public class Chatserver implements IChatserverCli, Runnable {
 		for (File file : keys) {
 			users.add(new User(file.getName().substring(0, file.getName().length() - ".pub.pem".length())));
 		}
+	}
+
+	@Override
+	public void run() {
+		new Thread(this.shell).start();
+
+		initRootNameserver();
+		initKeys();
+
+		this.tcpPort = config.getInt("tcp.port");
+		this.udpPort = config.getInt("udp.port");
 
 		try {
 			this.serverSocket = new ServerSocket(tcpPort);
@@ -145,22 +179,20 @@ public class Chatserver implements IChatserverCli, Runnable {
 
 						do {
 							try {
+								shell.writeLine("Shaking hands with " + socket.toString() + " ...");
 								session = shakeHands(socket);
 							} catch (IOException e) {
 								e.printStackTrace();
 								return;
 							}
-						} while (session == null);
-
-						session.run();
-
+						} while (session == null || session.talk());
 					}
 				};
 				threadPool.execute(handler);
 			} catch (IOException e) {
 				System.out.println("TCP Socket closed");
 				break;
-			} 
+			}
 		}
 	}
 
@@ -243,13 +275,9 @@ public class Chatserver implements IChatserverCli, Runnable {
 		byte[] secret = SecurityUtils.randomBytes(256 / 8);
 		byte[] iv = SecurityUtils.randomBytes(16);
 
-		message = (
-			"!ok " +
-			params[2] + " " + // Here we return the client challenge.
-			challenge + " " +
-			new String(Base64.encode(secret)) + " " +
-			new String(Base64.encode(iv))
-		).getBytes();
+		message = ("!ok " + params[2] + " " + // Here we return the client
+												// challenge.
+				challenge + " " + new String(Base64.encode(secret)) + " " + new String(Base64.encode(iv))).getBytes();
 
 		PublicKey publicKey = Keys.readPublicPEM(new File(config.getString("keys.dir"), username + ".pub.pem"));
 
@@ -324,33 +352,8 @@ public class Chatserver implements IChatserverCli, Runnable {
 		ObjectInputStream ois = new ObjectInputStream(new CipherInputStream(is, encryptionCipher));
 
 		shell.writeLine("Successfully authenticated " + username);
-		
-		/*Locating Registry*/
-		String regHost = this.config.getString("registry.host");
-		int regPort = this.config.getInt("registry.port");
-		
-		try {
-			this.registry = LocateRegistry.getRegistry(regHost, regPort);
-		} catch (RemoteException e) {
-			e.printStackTrace();
-		}
-		
-		String lookupName = this.config.getString("root_id");
-		
-		INameserverForChatserver rootNameserver = null;
-		
-		try {
-			rootNameserver = (INameserver) this.registry.lookup(lookupName);
-		} catch (AccessException e) {
-			e.printStackTrace();
-		} catch (RemoteException e) {
-			e.printStackTrace();
-		} catch (NotBoundException e) {
-			e.printStackTrace();
-		}
-		
 
-		Session session = new Session(this, user, ois, oos, rootNameserver);
+		Session session = new Session(this, user, ois, oos);
 		user.getSessions().add(session);
 		return session;
 	}
@@ -396,12 +399,12 @@ public class Chatserver implements IChatserverCli, Runnable {
 					buffer = message.getBytes();
 					packet = new DatagramPacket(buffer, buffer.length, address, port);
 					datagramSocket.send(packet);
-				}catch(SocketException se){
-					if(datagramSocket!=null){
+				} catch (SocketException se) {
+					if (datagramSocket != null) {
 						datagramSocket.close();
 						System.out.println("UDP Socket closed!");
 					}
-				}catch (IOException e) {
+				} catch (IOException e) {
 				}
 			}
 		}

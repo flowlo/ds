@@ -1,5 +1,6 @@
 package client;
 
+import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,7 +12,6 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.net.SocketException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
@@ -37,45 +37,36 @@ import cli.Command;
 import cli.Shell;
 import common.CipherInputStream;
 import common.CipherOutputStream;
-import dto.ErrorResponseDTO;
 import dto.LoggedOutDTO;
 import dto.LogoutDTO;
-import dto.LookedUpDTO;
 import dto.LookupDTO;
-import dto.RegisterDTO;
+import dto.AddressDTO;
 import dto.RegisteredDTO;
-import dto.SendDTO;
-import dto.SentDTO;
+import dto.MessageDTO;
 import util.Config;
 import util.HmacUtil;
 import util.Keys;
 import util.SecurityUtils;
 
 public class Client implements IClientCli, Runnable {
+	private static final String NEED_AUTH = "You need to be authenticated in order to issue this command.";
 
-	private final String componentName;
-	private final Config config;
-	private final InputStream userRequestStream;
-	private final PrintStream userResponseStream;
+	private final Shell shell;
+	private final String hostname;
+	private final int tcpPort;
+	private final int udpPort;
+	private final String keyDir;
+	private final String chatserverKey;
 
-	private Shell shell;
+	private String lastPublicMessage = null;
 
-	private String hostname;
-	private int tcp_port;
-	private int udp_port;
-
-	private String lastPublicMessage;
-
-	private Socket socket;
-	private DatagramSocket datagramSocket;
-
+	private Socket socket = new Socket();
 	private Thread listenThread;
-	private Thread udpThread;
 
 	private PrivateServer server = null;
 	private Thread serverThread;
 
-	private ConcurrentHashMap<String, String> myContacts;
+	private final ConcurrentHashMap<String, String> myContacts = new ConcurrentHashMap<String, String>();
 
 	private ObjectOutputStream oos = null;
 	private ObjectInputStream ois = null;
@@ -83,6 +74,8 @@ public class Client implements IClientCli, Runnable {
 	private HmacUtil hmac;
 
 	private final Buffer buffer = new Buffer(5, TimeUnit.SECONDS);
+
+	private String username = null;
 
 	/**
 	 * @param componentName
@@ -95,42 +88,79 @@ public class Client implements IClientCli, Runnable {
 	 *            the output stream to write the console output to
 	 */
 	public Client(String componentName, Config config, InputStream userRequestStream, PrintStream userResponseStream) {
-		this.componentName = componentName;
-		this.config = config;
-		this.userRequestStream = userRequestStream;
-		this.userResponseStream = userResponseStream;
+		shell = new Shell(componentName, userRequestStream, userResponseStream);
+		shell.register(this);
 
-		this.lastPublicMessage = "No message received!";
+		hmac = new HmacUtil(config.getString("hmac.key"));
 
-		this.shell = new Shell(this.componentName, this.userRequestStream, this.userResponseStream);
-		this.shell.register(this);
+		hostname = config.getString("chatserver.host");
+		tcpPort = config.getInt("chatserver.tcp.port");
+		udpPort = config.getInt("chatserver.udp.port");
 
-		this.myContacts = new ConcurrentHashMap<String, String>();
-
-		this.hmac = new HmacUtil(config.getString("hmac.key"));
+		keyDir = config.getString("keys.dir");
+		chatserverKey = config.getString("chatserver.key");
 	}
 
-	@Override
-	public void run() {
-		/* start shell */
-		new Thread(this.shell).start();
-
-		System.out.println(getClass().getName() + " up and waiting for commands!");
-
-		this.hostname = config.getString("chatserver.host");
-
-		/* get ports */
-		this.tcp_port = config.getInt("chatserver.tcp.port");
-		this.udp_port = config.getInt("chatserver.udp.port");
-
+	private boolean connect() {
 		try {
-			this.datagramSocket = new DatagramSocket();
-		} catch (SocketException e) {
+			socket = new Socket(hostname, tcpPort);
+		} catch (IOException e) {
 			e.printStackTrace();
+			return false;
+		}
+		return socket.isConnected();
+	}
+
+	private void teardown() throws IOException {
+		// NOTE: Maybe teardown should also clear previous
+		// lookups, however this is not specified.
+
+		// We're tearing down, so break authentication.
+		username = null;
+
+		// If we're still connected, disconnect the socket.
+		// This will likely interrupt the listener thread,
+		// which blocks on reading from ois most of the time
+		// forcing it to tear down as well.
+		//
+		// Dropping the reference to socket altogether
+		// would break re-authentication, so let's keep it.
+		// In case we're exiting, the reference will be cleared
+		// up without any side-effects.
+		if (socket != null && socket.isConnected()) {
+			socket.close();
+		}
+
+		// Closing the socket should have already done enough
+		// to kill the listener thread. However, there's nothing
+		// wrong with interrupting it. It could have waited on
+		// buffer for example (very unlikely).
+		if (listenThread != null && listenThread.isAlive()) {
+			listenThread.interrupt();
+			listenThread = null;
+		}
+
+		// If there's a private server, instruct it to shut down
+		// it's socket and thread pool.
+		if (server != null) {
+			server.close();
+			server = null;
+		}
+
+		// After giving the server a chance to tear down, interrupt.
+		if (serverThread != null && serverThread.isAlive()) {
+			serverThread.interrupt();
+			serverThread = null;
 		}
 	}
 
 	@Override
+	public void run() {
+		shell.run();
+	}
+
+	@Override
+	@Deprecated
 	public String login(String username, String password) throws IOException {
 		return null;
 	}
@@ -138,6 +168,9 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String logout() throws IOException {
+		if (username == null)
+			return NEED_AUTH;
+
 		if (oos != null) {
 			oos.writeObject(new LogoutDTO());
 			oos.flush();
@@ -152,20 +185,19 @@ public class Client implements IClientCli, Runnable {
 			e.printStackTrace();
 		}
 
-		if (dto != null) {
-			oos.close();
-			ois.close();
-			return dto.getMessage();
-		}
+		teardown();
 
-		return null;
+		return dto != null ? "Successfully logged out." : "Server did not confirm logout.";
 	}
 
 	@Override
 	@Command
 	public String send(String message) throws IOException {
+		if (username == null)
+			return NEED_AUTH;
+
 		this.lastPublicMessage = message;
-		oos.writeObject(new SendDTO(message));
+		oos.writeObject(new MessageDTO(message));
 		oos.flush();
 		return null;
 	}
@@ -173,16 +205,33 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String list() throws IOException {
-		this.udpThread = new Thread(new UDPThread(this));
-		this.udpThread.start();
-		return null;
+		InetAddress address = InetAddress.getByName(hostname);
+
+		DatagramSocket datagramSocket = new DatagramSocket();
+		datagramSocket.setSoTimeout(5000);
+
+		byte[] buffer = "!list".getBytes();
+		DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, udpPort);
+		datagramSocket.send(packet);
+
+		buffer = new byte[1024];
+		packet = new DatagramPacket(buffer, buffer.length);
+		datagramSocket.receive(packet);
+
+		datagramSocket.close();
+		return new String(packet.getData(), packet.getOffset(), packet.getLength());
 	}
 
 	@Override
 	@Command
 	public String msg(String username, String message) throws IOException {
-		if (!myContacts.containsKey(username) && !performLookup(username)) {
-			return "Failed to look up \"" + username + "\".";
+		if (!myContacts.containsKey(username)) {
+			if (username == null) {
+				return NEED_AUTH;
+			}
+			if (!performLookup(username)) {
+				return "Failed to look up \"" + username + "\".";
+			}
 		}
 
 		String address = this.myContacts.get(username);
@@ -227,9 +276,13 @@ public class Client implements IClientCli, Runnable {
 	@Override
 	@Command
 	public String lookup(String username) throws IOException {
+		if (this.username == null)
+			return NEED_AUTH;
+
 		if (performLookup(username)) {
 			return myContacts.get(username);
 		}
+
 		return "Failed to look up \"" + username + "\".";
 	}
 
@@ -237,29 +290,32 @@ public class Client implements IClientCli, Runnable {
 		oos.writeObject(new LookupDTO(username));
 		oos.flush();
 
-		LookedUpDTO dto = null;
+		AddressDTO dto = null;
 
 		try {
-			dto = (LookedUpDTO) buffer.take();
+			dto = (AddressDTO) buffer.take();
 		} catch (InterruptedException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 			return false;
 		}
 
-		if (dto == null || dto.getMessage() == null) {
+		if (dto == null || dto.getAddress() == null) {
 			return false;
 		}
 
-		myContacts.put(username, dto.getMessage());
+		myContacts.put(username, dto.getAddress());
 		return true;
 	}
 
 	@Override
 	@Command
 	public String register(String privateAddress) throws IOException {
+		if (username == null)
+			return NEED_AUTH;
+
 		if (this.server != null) {
-			return "[[ You already are registered fo pms. ]]";
+			return "It appears you already are registered.";
 		}
 
 		URI uri = null;
@@ -288,7 +344,7 @@ public class Client implements IClientCli, Runnable {
 		serverThread = new Thread(server);
 		serverThread.start();
 
-		oos.writeObject(new RegisterDTO(privateAddress));
+		oos.writeObject(new AddressDTO(privateAddress));
 		oos.flush();
 
 		RegisteredDTO dto = null;
@@ -305,65 +361,44 @@ public class Client implements IClientCli, Runnable {
 			return "Failed to register.";
 		}
 
-		return dto.getMessage();
+		return "Successfully registered address for \"" + username + "\".";
 	}
 
 	@Override
 	@Command
 	public String lastMsg() throws IOException {
-		return this.lastPublicMessage;
+		if (lastPublicMessage == null) {
+			return "No public message in memory.";
+		}
+		return lastPublicMessage;
 	}
 
 	@Override
 	@Command
 	public String exit() throws IOException {
-		if (this.oos != null) {
-			// this.logout();
-			this.oos.close();
-		}
-
-		/* shutdown thread pools */
-		if (this.serverThread != null) {
-			this.serverThread.interrupt();
-		}
-		if (this.udpThread != null) {
-			this.udpThread.interrupt();
-		}
-
-		/* close sockets */
-		if (this.socket != null) {
-			if (!this.socket.isClosed()) {
-				this.socket.close();
-			}
-		}
-		this.datagramSocket.close();
-
-		Thread.currentThread().interrupt();
-
-		return "[[ Going down for shutdown now! ]]";
+		teardown();
+		return "Bye!";
 	}
 
 	@Command
 	@Override
 	public String authenticate(String username) throws IOException {
-		try {
-			this.socket = new Socket(this.hostname, this.tcp_port);
-		} catch (UnknownHostException e) {
-			e.printStackTrace();
-		} catch (IOException e) {
-			e.printStackTrace();
+		if (this.username != null) {
+			return "It appears that you already are authenticated. !logout first.";
 		}
 
-		File privateKeyFile = new File(config.getString("keys.dir"), username + ".pem");
+		if (!socket.isConnected() && !connect()) {
+			return "Failed to connect to server.";
+		}
+
+		File privateKeyFile = new File(keyDir, username + ".pem");
 		if (!privateKeyFile.exists()) {
-			shell.writeLine("Could not find private key file for username \"" + username + "\".");
-			return null;
+			return "Could not find private key file for username \"" + username + "\".";
 		}
 
-		File publicKeyFile = new File(config.getString("chatserver.key"));
+		File publicKeyFile = new File(chatserverKey);
 		if (!publicKeyFile.exists()) {
-			shell.writeLine("Could not find server's public key.");
-			return null;
+			return "Could not find server's public key.";
 		}
 
 		// Initialize key material. We'll need the public key of the server
@@ -441,13 +476,11 @@ public class Client implements IClientCli, Runnable {
 		String[] params = new String(message).split(" ");
 
 		if (params == null || params.length != 5 || !params[0].equals("!ok")) {
-			shell.writeLine("Handshake failed (malformed message).");
-			return null;
+			return "Handshake failed (malformed message).";
 		}
 
 		if (!params[1].equals(challenge)) {
-			shell.writeLine("Handshake failed (wrong challenge: " + params[1] + " != " + challenge + ").");
-			return null;
+			return "Handshake failed (wrong challenge: " + params[1] + " != " + challenge + ").";
 		}
 
 		// Now that we have verified our part of the challenge,
@@ -485,7 +518,7 @@ public class Client implements IClientCli, Runnable {
 		// Send off the third message. Handshake is completed.
 		socket.getOutputStream().write(message);
 
-		this.oos = new ObjectOutputStream(new CipherOutputStream(socket.getOutputStream(), cipher));
+		oos = new ObjectOutputStream(new CipherOutputStream(socket.getOutputStream(), cipher));
 
 		Cipher decryptionCipher = null;
 		try {
@@ -503,83 +536,41 @@ public class Client implements IClientCli, Runnable {
 		}
 
 		ois = new ObjectInputStream(new CipherInputStream(is, decryptionCipher));
-		shell.writeLine("Successfully established secure connection with server!");
 
-		this.listenThread = new Thread(new Listener());
-		this.listenThread.start();
+		listenThread = new Thread(new Listener());
+		listenThread.start();
 
-		return null;
-	}
+		this.username = username;
 
-	class UDPThread implements Runnable {
-		private Client client;
-
-		public UDPThread(Client client) {
-			this.client = client;
-		}
-
-		public void run() {
-			byte[] buffer;
-			String request = "!list", response;
-			InetAddress address = null;
-			try {
-				address = InetAddress.getByName(client.hostname);
-			} catch (UnknownHostException e1) {
-				e1.printStackTrace();
-			}
-
-			buffer = new byte[1024];
-			try {
-				buffer = request.getBytes();
-				DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, client.udp_port);
-				datagramSocket.send(packet);
-
-				buffer = new byte[1024];
-				packet = new DatagramPacket(buffer, buffer.length);
-				datagramSocket.receive(packet);
-				response = new String(packet.getData(), 0, packet.getLength()).trim();
-
-				client.shell.writeLine(response);
-
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		}
+		return "Successfully established secure connection with server!";
 	}
 
 	class Listener implements Runnable {
 		@Override
 		public void run() {
 			try {
-				Object o = null;
 				while (!Thread.currentThread().isInterrupted()) {
+					Object o;
 					try {
 						o = ois.readObject();
-					} catch (SocketException e) {
-						ois.close();
-						break;
+					} catch (EOFException e) {
+						// Server hung up on us, or somebody closed the
+						// underlying stream.
+						return;
 					}
 
-					if (o instanceof SentDTO) {
-						lastPublicMessage = ((SentDTO) o).getMessage();
-						shell.writeLine(((SentDTO) o).getMessage());
-					} else if (o instanceof ErrorResponseDTO) {
-						shell.writeLine(((ErrorResponseDTO) o).getMessage());
-					} else {
+					if (!(o instanceof MessageDTO)) {
 						buffer.put(o);
+						continue;
 					}
+
+					shell.writeLine((lastPublicMessage = ((MessageDTO) o).getMessage()));
 				}
-				ois.close();
-			} catch (IOException | ClassNotFoundException | InterruptedException e) {
-				if (ois != null) {
-					try {
-						ois.close();
-					} catch (IOException e1) {
-					}
-				}
-			} finally {
-				ois = null;
-				oos = null;
+			} catch (ClassNotFoundException | InterruptedException e) {
+				e.printStackTrace();
+			} catch (IOException e) {
+				// Blow up spectacularily in case I/O fails.
+				throw new RuntimeException(e);
 			}
 		}
 	}

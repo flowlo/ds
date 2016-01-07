@@ -3,12 +3,11 @@ package dto;
 import java.io.Serializable;
 
 public class LookupDTO implements Serializable {
-
 	private static final long serialVersionUID = -7010980197806559200L;
 
-	private String username;
+	private final String username;
 
-	public LookupDTO(String username) {
+	public LookupDTO(final String username) {
 		super();
 		this.username = username;
 	}
@@ -16,10 +15,4 @@ public class LookupDTO implements Serializable {
 	public String getUsername() {
 		return username;
 	}
-
-	public void setUsername(String username) {
-		this.username = username;
-	}
-
-
 }

@@ -2,22 +2,16 @@ package dto;
 
 import java.io.Serializable;
 
-public class SendDTO implements Serializable{
-
+public class MessageDTO implements Serializable{
 	private static final long serialVersionUID = -1745505969335661293L;
 
-	private String message;
+	private final String message;
 
-	public SendDTO(String message) {
-		super();
+	public MessageDTO(final String message) {
 		this.message = message;
 	}
 
 	public String getMessage() {
 		return message;
-	}
-
-	public void setMessage(String message) {
-		this.message = message;
 	}
 }
