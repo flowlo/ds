@@ -8,52 +8,53 @@ import java.rmi.RemoteException;
 
 import dto.LoggedOutDTO;
 import dto.LogoutDTO;
-import dto.LookedUpDTO;
 import dto.LookupDTO;
-import dto.RegisterDTO;
+import dto.AddressDTO;
 import dto.RegisteredDTO;
-import dto.SendDTO;
-import dto.SentDTO;
+import dto.MessageDTO;
 import nameserver.INameserverForChatserver;
 import nameserver.exceptions.AlreadyRegisteredException;
 import nameserver.exceptions.InvalidDomainException;
 
-public class Session implements Runnable {
+public class Session {
 	private final Chatserver server;
 	private final User user;
-	private ObjectInputStream ois;
-	private ObjectOutputStream oos;
-	private final INameserverForChatserver rootNameserver;
+	private final ObjectInputStream ois;
+	private final ObjectOutputStream oos;
 
-	public Session(Chatserver server, User user, ObjectInputStream ois, ObjectOutputStream oos, INameserverForChatserver rootNameserver) {
+	private boolean online = true;
+
+	public Session(Chatserver server, User user, ObjectInputStream ois, ObjectOutputStream oos) {
 		this.server = server;
 		this.user = user;
 		this.ois = ois;
 		this.oos = oos;
-		this.rootNameserver = rootNameserver;
+	}
+
+	public User getUser() {
+		return user;
 	}
 
 	public boolean isOnline() {
-		return ois != null && oos != null && !user.getName().equals("");
+		return online;
 	}
 
-	public void processSend(SendDTO dto) throws IOException {
-		System.err.println("Looping over " + server.getUsers().size() + " users!");
+	public void processSend(MessageDTO dto) throws IOException {
 		for (User u : server.getUsers()) {
 			if (u == user || !u.isOnline()) {
 				System.err.println("Skipping " + u.getName());
 				continue;
 			}
 			System.err.println("Writing object to " + u.getName());
-			u.writeObject(new SentDTO(user.getName() + ": " + dto.getMessage()));
+			u.writeObject(new MessageDTO(user.getName() + ": " + dto.getMessage()));
 		}
 	}
 
-	public String processRegister(RegisterDTO dto) {
+	public String processRegister(AddressDTO dto) {
 		this.user.address = dto.getAddress();
-		
+
 		try {
-			this.rootNameserver.registerUser(this.user.getName(), dto.getAddress());
+			server.getRootNameserver().registerUser(this.user.getName(), dto.getAddress());
 		} catch (RemoteException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
@@ -64,66 +65,58 @@ public class Session implements Runnable {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		
+
 		return "Successfully registered address for " + this.user.getName() + '.';
 	}
 
 	public String processLookup(LookupDTO dto) {
-		
 		try {
-			return this.rootNameserver.lookup(dto.getUsername());
+			return server.getRootNameserver().lookup(dto.getUsername());
 		} catch (RemoteException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		
-		
-		return null;
-	}
 
-	public String processLogout(LogoutDTO dto) throws IOException {
-		return "Successfully logged out.";
+		return null;
 	}
 
 	public void writeObject(Object o) throws IOException {
 		oos.writeObject(o);
 	}
-	
-	private void removeSession(){
-		this.user.getSessions().remove(this); //Remove the instance form session set
+
+	private void removeSession() {
+		this.user.getSessions().remove(this); // Remove the instance form
+												// session set
 	}
 
-	@Override
-	public void run() {
+	public boolean talk() {
 		try {
 			Object o = null;
 
 			while (!Thread.currentThread().isInterrupted()) {
 				o = ois.readObject();
 				System.out.println("Received " + o.getClass().getName());
-				if (o instanceof SendDTO) {
-					this.processSend((SendDTO) o);
-				} else if (o instanceof RegisterDTO) {
-					writeObject(new RegisteredDTO((RegisterDTO) o, this.processRegister((RegisterDTO) o)));
+				if (o instanceof MessageDTO) {
+					this.processSend((MessageDTO) o);
+				} else if (o instanceof AddressDTO) {
+					writeObject(new RegisteredDTO());
 				} else if (o instanceof LookupDTO) {
-					writeObject(new LookedUpDTO((LookupDTO) o, this.processLookup((LookupDTO) o)));
+					writeObject(new AddressDTO(server.getRootNameserver().lookup(((LookupDTO)o).getUsername())));
 				} else if (o instanceof LogoutDTO) {
-					writeObject(new LoggedOutDTO((LogoutDTO) o, this.processLogout((LogoutDTO) o)));
-					this.oos.close();
-					this.ois.close();
-					break;
+					writeObject(new LoggedOutDTO());
+					System.err.println("Returning from talk()");
+					return true;
 				}
 				oos.flush();
 			}
-		} catch(EOFException eof){
-			System.out.printf("User:[%s] closed connection!\n",user.getName());
-		}catch (IOException | ClassNotFoundException e) {
+		} catch (EOFException eof) {
+			System.out.printf("User:[%s] closed connection!\n", user.getName());
+		} catch (IOException | ClassNotFoundException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
-		}finally{
-			this.oos = null;
-			this.ois = null;
+		} finally {
 			removeSession();
 		}
+		return false;
 	}
 }

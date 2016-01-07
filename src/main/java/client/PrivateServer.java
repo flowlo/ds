@@ -41,25 +41,23 @@ public class PrivateServer implements Runnable {
 
 		Socket socket = null;
 
-		while (!Thread.currentThread().isInterrupted()) {
+		while (true) {
 			try {
 				socket = serverSocket.accept();
 				threadPool.execute(new ClientHandler(socket.getInputStream(), socket.getOutputStream()));
 			} catch (IOException e) {
 				e.printStackTrace();
+				return;
 			}
 		}
+	}
 
-		if (socket != null && !socket.isClosed()) {
-			try {
-				socket.close();
-			} catch (IOException e) {
-				System.out.println("Failed to close socket");
-			}
-		}
+	public void close() {
+		try {
+			serverSocket.close();
+		} catch (IOException ignored) {}
 
-		Thread.currentThread().interrupt();
-
+		threadPool.shutdownNow();
 	}
 
 	class ClientHandler implements Runnable {
@@ -95,10 +93,11 @@ public class PrivateServer implements Runnable {
 					os.write(message.getBytes());
 					os.flush();
 				}
+
 				is.close();
 				os.close();
 			} catch(IOException e) {
-				e.printStackTrace();
+				throw new RuntimeException(e);
 			}
 		}
 	}	
