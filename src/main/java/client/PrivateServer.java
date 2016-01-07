@@ -44,8 +44,9 @@ public class PrivateServer implements Runnable {
 				socket = serverSocket.accept();
 				threadPool.execute(new ClientHandler(socket.getInputStream(), socket.getOutputStream()));
 			} catch (IOException e) {
-				e.printStackTrace();
-				return;
+				try {
+					shell.writeLine("Thread listening for private server is going down.");
+				} catch (IOException ignored) {}
 			}
 		}
 	}
