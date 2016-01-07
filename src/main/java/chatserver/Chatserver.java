@@ -2,7 +2,6 @@ package chatserver;
 
 import java.io.*;
 import java.net.*;
-import java.rmi.AccessException;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
@@ -408,12 +407,13 @@ public class Chatserver implements IChatserverCli, Runnable {
 					buffer = message.getBytes();
 					packet = new DatagramPacket(buffer, buffer.length, address, port);
 					datagramSocket.send(packet);
-				} catch (SocketException se) {
-					se.printStackTrace();
+				} catch (IOException se) {
+					try {
+						shell.writeLine("UDP listening thread is going down.");
+					} catch (IOException ignored) {}
 					if (datagramSocket != null) {
 						datagramSocket.close();
 					}
-				} catch (IOException e) {
 				}
 			}
 		}
