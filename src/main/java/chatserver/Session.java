@@ -12,6 +12,7 @@ import dto.LookupDTO;
 import dto.AddressDTO;
 import dto.RegisteredDTO;
 import dto.MessageDTO;
+import nameserver.INameserverForChatserver;
 import nameserver.exceptions.AlreadyRegisteredException;
 import nameserver.exceptions.InvalidDomainException;
 
@@ -60,8 +61,14 @@ public class Session {
 	}
 
 	public AddressDTO lookup(LookupDTO dto) {
+		String parts[] = dto.getUsername().split(".");
+		INameserverForChatserver callback = server.getRootNameserver();
+
 		try {
-			return new AddressDTO(server.getRootNameserver().lookup(dto.getUsername()));
+			for (int i = (parts.length - 1) ; i > 0 ; i--) {
+				callback = callback.getNameserver(parts[i]);
+			}
+			return new AddressDTO(callback.lookup(dto.getUsername()));
 		} catch (RemoteException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
