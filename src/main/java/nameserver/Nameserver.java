@@ -346,13 +346,14 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 
 		this.logToShell("Nameserver is going down for shutdown NOW!");
 
+		try {
+			// unexport the previously exported remote object
+			UnicastRemoteObject.unexportObject(this, true);
+		} catch (NoSuchObjectException e) {
+			System.err.println("Error while unexporting object: " + e.getMessage());
+		}
+
 		if (this.isRoot) {
-			try {
-				// unexport the previously exported remote object
-				UnicastRemoteObject.unexportObject(this, true);
-			} catch (NoSuchObjectException e) {
-				System.err.println("Error while unexporting object: " + e.getMessage());
-			}
 
 			try {
 				// unbind the remote object so that a client can't find it
