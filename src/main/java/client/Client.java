@@ -587,8 +587,9 @@ public class Client implements IClientCli, Runnable {
 			} catch (ClassNotFoundException | InterruptedException e) {
 				e.printStackTrace();
 			} catch (IOException e) {
-				// Blow up spectacularily in case I/O fails.
-				throw new RuntimeException(e);
+				try {
+					shell.writeLine("Listening thread disconnected from server.");
+				} catch (IOException ignored) {}
 			}
 		}
 	}

@@ -95,7 +95,9 @@ public class PrivateServer implements Runnable {
 				is.close();
 				os.close();
 			} catch(IOException e) {
-				throw new RuntimeException(e);
+				try {
+					shell.writeLine("Private messaging shutting down.");
+				} catch (IOException ignored) {}
 			}
 		}
 	}	
