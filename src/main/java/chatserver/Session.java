@@ -99,6 +99,7 @@ public class Session {
 				if (o instanceof MessageDTO) {
 					this.processSend((MessageDTO) o);
 				} else if (o instanceof AddressDTO) {
+					processRegister((AddressDTO)o);
 					writeObject(new RegisteredDTO());
 				} else if (o instanceof LookupDTO) {
 					writeObject(new AddressDTO(server.getRootNameserver().lookup(((LookupDTO)o).getUsername())));
