@@ -352,7 +352,7 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		} catch (NoSuchObjectException e) {
 			System.err.println("Error while unexporting object: " + e.getMessage());
 		}
-		
+
 		if (this.isRoot) {
 
 			try {
