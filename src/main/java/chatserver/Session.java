@@ -46,7 +46,11 @@ public class Session {
 
 		try {
 			server.getRootNameserver().registerUser(user.getName(), user.getAddress());
-		} catch (RemoteException | InvalidDomainException | AlreadyRegisteredException e) {
+		} catch (AlreadyRegisteredException e) {
+			try {
+				server.getShell().writeLine("Denied registration of " + user.getName() + " at " + dto.getAddress() + " because user is already registered!");
+			} catch (IOException ignored) {}
+		} catch (RemoteException | InvalidDomainException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 			return null;

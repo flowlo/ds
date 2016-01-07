@@ -82,6 +82,10 @@ public class Chatserver implements IChatserverCli, Runnable {
 		return rootNameserver;
 	}
 
+	public Shell getShell() {
+		return shell;
+	}
+
 	private void initRootNameserver() {
 		Registry registry = null;
 		try {
