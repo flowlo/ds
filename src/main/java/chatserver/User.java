@@ -15,12 +15,7 @@ public class User {
 	}
 
 	public boolean isOnline() {
-		for (Session session : sessions) {
-			if (session.isOnline()) {
-				return true;
-			}
-		}
-		return false;
+		return !sessions.isEmpty();
 	}
 
 	public void writeObject(Object o) throws IOException {
@@ -29,8 +24,12 @@ public class User {
 		}
 	}
 
-	public Set<Session> getSessions() {
-		return sessions;
+	public boolean addSession(Session session) {
+		return sessions.add(session);
+	}
+
+	public boolean removeSession(Session session) {
+		return sessions.remove(session);
 	}
 
 	public String getName() {

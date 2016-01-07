@@ -21,8 +21,6 @@ public class Session {
 	private final ObjectInputStream ois;
 	private final ObjectOutputStream oos;
 
-	private boolean online = true;
-
 	public Session(Chatserver server, User user, ObjectInputStream ois, ObjectOutputStream oos) {
 		this.server = server;
 		this.user = user;
@@ -30,30 +28,24 @@ public class Session {
 		this.oos = oos;
 	}
 
-	public User getUser() {
-		return user;
-	}
-
-	public boolean isOnline() {
-		return online;
-	}
-
-	public void processSend(MessageDTO dto) throws IOException {
+	public void send(MessageDTO dto) {
 		for (User u : server.getUsers()) {
-			if (u == user || !u.isOnline()) {
-				System.err.println("Skipping " + u.getName());
-				continue;
+			if (u != user && u.isOnline()) {
+				try {
+					u.writeObject(new MessageDTO(user.getName() + ": " + dto.getMessage()));
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
 			}
-			System.err.println("Writing object to " + u.getName());
-			u.writeObject(new MessageDTO(user.getName() + ": " + dto.getMessage()));
 		}
 	}
 
-	public RegisteredDTO processRegister(AddressDTO dto) {
-		user.address = dto.getAddress();
+	public RegisteredDTO register(AddressDTO dto) {
+		user.setAddress(dto.getAddress());
 
 		try {
-			server.getRootNameserver().registerUser(this.user.getName(), dto.getAddress());
+			server.getRootNameserver().registerUser(user.getName(), user.getAddress());
 		} catch (RemoteException|InvalidDomainException|AlreadyRegisteredException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
@@ -63,24 +55,18 @@ public class Session {
 		return new RegisteredDTO();
 	}
 
-	public String processLookup(LookupDTO dto) {
+	public AddressDTO lookup(LookupDTO dto) {
 		try {
-			return server.getRootNameserver().lookup(dto.getUsername());
+			return new AddressDTO(server.getRootNameserver().lookup(dto.getUsername()));
 		} catch (RemoteException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
+			return null;
 		}
-
-		return null;
 	}
 
 	public void writeObject(Object o) throws IOException {
 		oos.writeObject(o);
-	}
-
-	private void removeSession() {
-		// Remove the instance form session set
-		this.user.getSessions().remove(this);
 	}
 
 	public boolean talk() {
@@ -91,11 +77,11 @@ public class Session {
 				o = ois.readObject();
 				System.out.println("Received " + o.getClass().getName());
 				if (o instanceof MessageDTO) {
-					this.processSend((MessageDTO) o);
+					send((MessageDTO) o);
 				} else if (o instanceof AddressDTO) {
-					writeObject(processRegister((AddressDTO)o));
+					writeObject(register((AddressDTO)o));
 				} else if (o instanceof LookupDTO) {
-					writeObject(new AddressDTO(server.getRootNameserver().lookup(((LookupDTO)o).getUsername())));
+					writeObject(lookup((LookupDTO)o));
 				} else if (o instanceof LogoutDTO) {
 					writeObject(new LoggedOutDTO());
 					System.err.println("Returning from talk()");
@@ -109,8 +95,52 @@ public class Session {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} finally {
-			removeSession();
+			user.removeSession(this);
 		}
 		return false;
 	}
+
+	@Override
+	public int hashCode() {
+		final int prime = 31;
+		int result = 1;
+		result = prime * result + ((ois == null) ? 0 : ois.hashCode());
+		result = prime * result + ((oos == null) ? 0 : oos.hashCode());
+		result = prime * result + ((server == null) ? 0 : server.hashCode());
+		result = prime * result + ((user == null) ? 0 : user.hashCode());
+		return result;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		if (this == obj)
+			return true;
+		if (obj == null)
+			return false;
+		if (getClass() != obj.getClass())
+			return false;
+		Session other = (Session) obj;
+		if (ois == null) {
+			if (other.ois != null)
+				return false;
+		} else if (!ois.equals(other.ois))
+			return false;
+		if (oos == null) {
+			if (other.oos != null)
+				return false;
+		} else if (!oos.equals(other.oos))
+			return false;
+		if (server == null) {
+			if (other.server != null)
+				return false;
+		} else if (!server.equals(other.server))
+			return false;
+		if (user == null) {
+			if (other.user != null)
+				return false;
+		} else if (!user.equals(other.user))
+			return false;
+		return true;
+	}
+
 }
