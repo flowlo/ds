@@ -3,8 +3,8 @@ package nameserver;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
-import java.rmi.AccessException;
 import java.rmi.AlreadyBoundException;
+import java.rmi.NoSuchObjectException;
 import java.rmi.NotBoundException;
 import java.rmi.Remote;
 import java.rmi.RemoteException;
@@ -38,6 +38,8 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 
 	private String domain;
 
+	private boolean isRoot;
+
 	/**
 	 * @param componentName
 	 *            the name of the component - represented in the prompt
@@ -61,6 +63,8 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		/* register shell */
 		this.shell = new Shell(componentName, userRequestStream, userResponseStream);
 		this.shell.register(this);
+
+		this.isRoot = false;
 	}
 
 	@Override
@@ -68,19 +72,17 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		/* start shell */
 		(new Thread(this.shell)).start();
 
-		boolean isRoot = false;
-
 		/* read domain */
 		this.domain = null;
 		try {
 			this.domain = this.config.getString("domain");
 			logToShell("Nameserver for " + domain + " has been started.");
 		} catch (java.util.MissingResourceException ex) {
-			isRoot = true;
+			this.isRoot = true;
 			logToShell("Root-nameserver has been started.");
 		}
 
-		if (isRoot) {
+		if (this.isRoot) {
 			this.domain = "root-domain";
 
 			String bindingName = config.getString("root_id");
@@ -261,65 +263,38 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 
 	@Override
 	public INameserverForChatserver getNameserver(String zone) throws RemoteException {
-		String[] splitStr = this.stripToResolve(zone);
 		INameserver ret = null;
 
-		if (splitStr == null) {
+		if (zone == null) {
 			this.logToShell("Bad Arguments for lookup passed.");
 			return null;
 		}
 
-		if (splitStr.length == 1) {
-			ret = this.zones.get(splitStr[0]);
+		ret = this.zones.get(zone);
 
-			if (ret == null) {
-				this.logToShell("No user matching '" + zone + "' found.");
-			}
-
-			return ret;
+		if (ret == null) {
+			this.logToShell("No zone matching '" + zone + "' found.");
 		}
 
-		INameserver next = this.zones.get(splitStr[1]);
-
-		if (next == null) {
-			this.logToShell("No zone matching '" + splitStr[1] + "' found.");
-			return null;
-		}
-
-		this.logToShell("Came across " + this.domain + " going deeper to find " + splitStr[0]);
-		return next.getNameserver(splitStr[0]);
+		return ret;
 	}
 
 	@Override
 	public String lookup(String username) throws RemoteException {
-		String[] splitStr = this.stripToResolve(username);
 		String ret = null;
 
-		if (splitStr == null) {
+		if (username == null) {
 			this.logToShell("Bad Arguments for lookup passed.");
 			return null;
 		}
 
-		if (splitStr.length == 1) {
-			ret = this.users.get(splitStr[0]);
+		ret = this.users.get(username);
 
-			if (ret == null) {
-				this.logToShell("No user matching '" + username + "' found.");
-			}
-
-			return ret;
+		if (ret == null) {
+			this.logToShell("No user matching '" + username + "' found.");
 		}
 
-		INameserver next = this.zones.get(splitStr[1]);
-
-		if (next == null) {
-			this.logToShell("No zone matching '" + splitStr[1] + "' found.");
-			return null;
-		}
-
-		this.logToShell("Came across " + this.domain + " going deeper to find " + splitStr[0]);
-		return next.lookup(splitStr[0]);
-
+		return ret;
 	}
 
 	@Override
@@ -370,6 +345,24 @@ public class Nameserver implements INameserver, INameserverCli, Runnable {
 		}
 
 		this.logToShell("Nameserver is going down for shutdown NOW!");
+
+		if (this.isRoot) {
+			try {
+				// unexport the previously exported remote object
+				UnicastRemoteObject.unexportObject(this, true);
+			} catch (NoSuchObjectException e) {
+				System.err.println("Error while unexporting object: " + e.getMessage());
+			}
+
+			try {
+				// unbind the remote object so that a client can't find it
+				// anymore
+				registry.unbind(config.getString("root_id"));
+			} catch (Exception e) {
+				System.err.println("Error while unbinding object: " + e.getMessage());
+			}
+		}
+
 		/* close streams */
 		this.shell.close();
 
