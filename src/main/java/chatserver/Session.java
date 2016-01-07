@@ -12,7 +12,6 @@ import dto.LookupDTO;
 import dto.AddressDTO;
 import dto.RegisteredDTO;
 import dto.MessageDTO;
-import nameserver.INameserverForChatserver;
 import nameserver.exceptions.AlreadyRegisteredException;
 import nameserver.exceptions.InvalidDomainException;
 
@@ -50,23 +49,18 @@ public class Session {
 		}
 	}
 
-	public String processRegister(AddressDTO dto) {
-		this.user.address = dto.getAddress();
+	public RegisteredDTO processRegister(AddressDTO dto) {
+		user.address = dto.getAddress();
 
 		try {
 			server.getRootNameserver().registerUser(this.user.getName(), dto.getAddress());
-		} catch (RemoteException e) {
+		} catch (RemoteException|InvalidDomainException|AlreadyRegisteredException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
-		} catch (AlreadyRegisteredException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (InvalidDomainException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			return null;
 		}
 
-		return "Successfully registered address for " + this.user.getName() + '.';
+		return new RegisteredDTO();
 	}
 
 	public String processLookup(LookupDTO dto) {
@@ -85,8 +79,8 @@ public class Session {
 	}
 
 	private void removeSession() {
-		this.user.getSessions().remove(this); // Remove the instance form
-												// session set
+		// Remove the instance form session set
+		this.user.getSessions().remove(this);
 	}
 
 	public boolean talk() {
@@ -99,8 +93,7 @@ public class Session {
 				if (o instanceof MessageDTO) {
 					this.processSend((MessageDTO) o);
 				} else if (o instanceof AddressDTO) {
-					processRegister((AddressDTO)o);
-					writeObject(new RegisteredDTO());
+					writeObject(processRegister((AddressDTO)o));
 				} else if (o instanceof LookupDTO) {
 					writeObject(new AddressDTO(server.getRootNameserver().lookup(((LookupDTO)o).getUsername())));
 				} else if (o instanceof LogoutDTO) {
