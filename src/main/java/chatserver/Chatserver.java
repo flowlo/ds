@@ -354,7 +354,7 @@ public class Chatserver implements IChatserverCli, Runnable {
 		shell.writeLine("Successfully authenticated " + username);
 
 		Session session = new Session(this, user, ois, oos);
-		user.getSessions().add(session);
+		user.addSession(session);
 		return session;
 	}
 
