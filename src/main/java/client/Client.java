@@ -102,12 +102,24 @@ public class Client implements IClientCli, Runnable {
 	}
 
 	private boolean connect() {
+		if (socket != null && socket.isConnected()) {
+			return true;
+		}
+
+		if (socket != null) {
+			try {
+				socket.close();
+			} catch (IOException ignored) {}
+			socket = null;
+		}
+
 		try {
 			socket = new Socket(hostname, tcpPort);
 		} catch (IOException e) {
 			e.printStackTrace();
 			return false;
 		}
+
 		return socket.isConnected();
 	}
 
@@ -129,6 +141,7 @@ public class Client implements IClientCli, Runnable {
 		// up without any side-effects.
 		if (socket != null && socket.isConnected()) {
 			socket.close();
+			socket = null;
 		}
 
 		// Closing the socket should have already done enough
@@ -392,7 +405,7 @@ public class Client implements IClientCli, Runnable {
 			return "It appears that you already are authenticated. !logout first.";
 		}
 
-		if (!socket.isConnected() && !connect()) {
+		if (!connect()) {
 			return "Failed to connect to server.";
 		}
 
