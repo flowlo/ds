@@ -73,7 +73,7 @@ public class Shell implements Runnable, Closeable {
 		try {
 			for (String line; !Thread.currentThread().isInterrupted()
 					&& (line = readLine()) != null;) {
-				write(String.format("%s\t\t%s> %s%n",
+				write(String.format("%s %s> %s%n",
 						DATE_FORMAT.get().format(new Date()), name, line)
 						.getBytes());
 				Object result;
@@ -123,12 +123,12 @@ public class Shell implements Runnable, Closeable {
 	public void writeLine(String line) throws IOException {
 		String now = DATE_FORMAT.get().format(new Date());
 		if (line.indexOf('\n') >= 0 && line.indexOf('\n') < line.length() - 1) {
-			write((String.format("%s\t\t%s:\n", now, name)).getBytes());
+			write((String.format("%s %s:\n", now, name)).getBytes());
 			for (String l : line.split("[\\r\\n]+")) {
-				write((String.format("%s\t\t%s\n", now, l)).getBytes());
+				write((String.format("%s %s\n", now, l)).getBytes());
 			}
 		} else {
-			write((String.format("%s\t\t%s: %s%s", now, name, line,
+			write((String.format("%s %s: %s%s", now, name, line,
 					line.endsWith("\n") ? "" : "\n")).getBytes());
 		}
 	}
