@@ -1,15 +1,14 @@
 # dslab2
 
-All stages stated in the Lab Description were implemented. Implementation details were discussed as a team and afterwards reflected exhaustively.
+All stages stated in the Lab Description were implemented. Implementation details were discussed in the team and afterwards reflected exhaustively.
 
 ## Stage 1
 
-The nameservers were easy to implement, there wasn’t much room for decisions. The two Interfaces INameserver and INameserverForChatserver caused some confusion, because INameserver implements NameserverForChatserver.
+The nameservers were easy to implement, there wasn't much room for interpretation. The two Interfaces `INameserver` and `INameserverForChatserver` caused some confusion, because `INameserver implements NameserverForChatserver`.
 
 ## Stage 2
 
-We decided to reimplement transformation streams (something similar to Cipher(In|Out)putStream), as it is by far the most elegant and easiest way to provide encrypted streamed communication.
-
+We decided to reimplement transformation streams (something similar to `Cipher(In|Out)putStream`), as it is a very elegant and straightforward way to provide encrypted streamed communication.
 
 ## Stage 3
 
